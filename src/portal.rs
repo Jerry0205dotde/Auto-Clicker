@@ -1,12 +1,18 @@
-use std::{pin::Pin, sync::Arc};
+use std::{future::Future, pin::Pin, sync::Arc};
 
-use ashpd::desktop::{
-    PersistMode, Session,
-    remote_desktop::{
-        DeviceType, KeyState, NotifyPointerMotionAbsoluteOptions, RemoteDesktop,
-        SelectDevicesOptions,
+use ashpd::{
+    desktop::{
+        PersistMode, Session,
+        remote_desktop::{
+            DeviceType, KeyState, NotifyPointerMotionAbsoluteOptions, RemoteDesktop,
+            SelectDevicesOptions,
+        },
+        screencast::{CursorMode, Screencast, SelectSourcesOptions, SourceType},
     },
-    screencast::{CursorMode, Screencast, SelectSourcesOptions, SourceType},
+    zbus::{
+        fdo::DBusProxy,
+        names::{OwnedUniqueName, UniqueName},
+    },
 };
 use futures_util::{FutureExt, StreamExt, future::FusedFuture};
 use thiserror::Error;
@@ -19,6 +25,33 @@ use crate::model::{ClickSettings, MonitorGeometry};
 
 const EVENT_TIMEOUT: Duration = Duration::from_millis(250);
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
+const PORTAL_NAME: &str = "org.freedesktop.portal.Desktop";
+
+/// Return the portal's current unique name and a future that resolves when
+/// that connection leaves the bus. Sessions created afterwards belong to it.
+/// A crashed or restarted portal never sends `Closed` for them, and zbus
+/// follows a new owner of the well-known name without ending any stream.
+pub(crate) async fn watch_portal_owner(
+    connection: &ashpd::zbus::Connection,
+) -> ashpd::zbus::Result<(OwnedUniqueName, impl Future<Output = ()> + Send + 'static)> {
+    let bus = DBusProxy::new(connection).await?;
+    // Subscribe first, so a change right after reading the owner is not missed.
+    let mut changes = bus
+        .receive_name_owner_changed_with_args(&[(0, PORTAL_NAME)])
+        .await?;
+    let owner = bus.get_name_owner(PORTAL_NAME.try_into()?).await?;
+    let watched = owner.clone();
+    let lost = async move {
+        while let Some(change) = changes.next().await {
+            if change.args().is_ok_and(|args| {
+                args.old_owner().as_ref().map(UniqueName::as_str) == Some(watched.as_str())
+            }) {
+                break;
+            }
+        }
+    };
+    Ok((owner, lost))
+}
 
 /// Register each owned bus connection before its first portal request. Qt's
 /// desktop file name does not identify the worker's separate D-Bus peers.
@@ -226,6 +259,9 @@ impl PortalClickSession {
             return Err(PortalError::PointerNotGranted);
         }
 
+        let (_, owner_lost) = watch_portal_owner(connection)
+            .await
+            .map_err(|error| PortalError::Unavailable(error.into()))?;
         *owned_session = Some(Arc::new(
             portal
                 .create_session(Default::default())
@@ -239,7 +275,10 @@ impl PortalClickSession {
             async move {
                 if let Ok(mut events) = watched_session.receive_closed().await {
                     let _ = ready_tx.send(());
-                    let _ = events.next().await;
+                    tokio::select! {
+                        _ = events.next() => {}
+                        () = owner_lost => {}
+                    }
                 }
             }
             .fuse(),

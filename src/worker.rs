@@ -40,7 +40,7 @@ use tokio::{
 
 use crate::{
     model::{ClickSettings, ValidationError},
-    portal::{PortalClickSession, register_connection},
+    portal::{PortalClickSession, register_connection, watch_portal_owner},
     scheduler::Schedule,
     state::{RunState, StateMachine},
 };
@@ -436,6 +436,8 @@ struct HotkeyRegistration {
     connection: ashpd::zbus::Connection,
     portal: GlobalShortcuts,
     session: Arc<Session<GlobalShortcuts>>,
+    /// Unique bus name of the portal connection that created the session.
+    portal_owner: OwnedUniqueName,
     closed: HotkeyClosedWatcher,
     actual: Option<String>,
 }
@@ -479,14 +481,20 @@ async fn setup_hotkey(
         let portal = GlobalShortcuts::with_connection(connection.clone())
             .await
             .map_err(|error| format!("Tastenkürzel sind nicht verfügbar. Prüfe den KDE-Portaldienst. Details: {error}"))?;
-        session = Some(Arc::new(
-            portal
-                .create_session(Default::default())
-                .await
-                .map_err(|error| {
-                    format!("Das Tastenkürzel konnte nicht eingerichtet werden: {error}")
-                })?,
-        ));
+        let (portal_owner, owner_lost) =
+            watch_portal_owner(&connection).await.map_err(|error| {
+                format!("Das Tastenkürzel konnte nicht eingerichtet werden: {error}")
+            })?;
+        let mut owner_lost = Box::pin(owner_lost);
+        // A vanished portal never sends the Response to its pending request.
+        let created = tokio::select! {
+            biased;
+            () = &mut owner_lost => return Err(HOTKEY_SESSION_CLOSED.to_owned()),
+            result = portal.create_session(Default::default()) => result,
+        };
+        session = Some(Arc::new(created.map_err(|error| {
+            format!("Das Tastenkürzel konnte nicht eingerichtet werden: {error}")
+        })?));
         let owned_session = session
             .as_ref()
             .ok_or("Die Freigabe für das Tastenkürzel fehlt. Wähle „Erneut versuchen“.")?;
@@ -497,7 +505,10 @@ async fn setup_hotkey(
                 if let Ok(events) = watched_session.receive_closed().await {
                     let _ = ready_tx.send(());
                     futures_util::pin_mut!(events);
-                    let _ = events.next().await;
+                    tokio::select! {
+                        _ = events.next() => {}
+                        () = owner_lost => {}
+                    }
                 }
                 HotkeySignal::Closed
             }
@@ -535,7 +546,7 @@ async fn setup_hotkey(
             Ok(actual)
         };
         let actual = while_hotkey_open(&mut closed, binding).await?;
-        Ok((portal, actual, closed))
+        Ok((portal, portal_owner, actual, closed))
     };
     let result = tokio::select! {
         biased;
@@ -543,9 +554,10 @@ async fn setup_hotkey(
         result = operation => result,
     };
     match result {
-        Ok((portal, actual, closed)) => Ok(HotkeyRegistration {
+        Ok((portal, portal_owner, actual, closed)) => Ok(HotkeyRegistration {
             connection,
             portal,
+            portal_owner,
             closed,
             actual,
             session: session
@@ -961,27 +973,20 @@ async fn run_worker(
                 hotkey_task = None;
                 hotkey_cancel = None;
                 match result {
-                    Ok(Ok(HotkeyRegistration { connection, portal, session, mut closed, actual })) => {
+                    Ok(Ok(HotkeyRegistration { connection, portal, session, portal_owner, mut closed, actual })) => {
                         // Bounded, so a stalled bus cannot delay a later Stop or Shutdown.
                         let streams = while_hotkey_open(&mut closed, async {
                             timeout(PORTAL_CLOSE_TIMEOUT, async {
                                 // Raw messages keep their receive position for the start barrier.
                                 let activations = portal.receive_signal("Activated").await.map_err(|error| error.to_string())?;
                                 let changes = portal.receive_shortcuts_changed().await.map_err(|error| error.to_string())?;
-                                // The start barrier accepts only replies from this connection.
-                                let owner = zbus::fdo::DBusProxy::new(&connection)
-                                    .await
-                                    .map_err(|error| error.to_string())?
-                                    .get_name_owner(portal.destination().clone())
-                                    .await
-                                    .map_err(|error| error.to_string())?;
-                                Ok::<_, String>((activations, changes, owner))
+                                Ok::<_, String>((activations, changes))
                             })
                             .await
                             .unwrap_or_else(|_| Err("Zeitüberschreitung beim Einrichten des Tastenkürzels.".to_owned()))
                         }).await;
                         match streams {
-                            Ok((activations, changes, portal_owner)) => {
+                            Ok((activations, changes)) => {
                                 let activations = activations.filter_map(|message| {
                                     let activation = message.body().deserialize::<Activated>().ok();
                                     future::ready(activation.map(|activation| HotkeySignal::Activated(activation, message.recv_position())))
