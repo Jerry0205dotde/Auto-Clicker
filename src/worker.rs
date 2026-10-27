@@ -55,6 +55,9 @@ const HOTKEY_ID: &str = "toggle-clicking";
 const HOTKEY_SESSION_CLOSED: &str =
     "Die Freigabe für das Tastenkürzel wurde beendet. Wähle „Erneut versuchen“.";
 const BUTTON_START_DELAY_SECS: u8 = 3;
+/// Suggested key in the XDG shortcut format. The saved hotkey is KDE's
+/// localized description ("Strg+F8") and only fit for display.
+const PREFERRED_TRIGGER: &str = "Pause";
 const WORKER_STOPPED: &str = "Die Klicksteuerung wurde beendet. Starte Klickmeister neu.";
 
 #[derive(Debug)]
@@ -62,7 +65,7 @@ pub enum Command {
     Start(ClickSettings),
     StartFromButton(ClickSettings),
     Stop,
-    ConfigureHotkey(String),
+    ConfigureHotkey,
     Shutdown,
 }
 
@@ -141,7 +144,7 @@ enum QueuedCommand {
         from_button: bool,
         reserved: bool,
     },
-    ConfigureHotkey(String),
+    ConfigureHotkey,
 }
 
 /// A Stop or Shutdown that the worker has not handled yet.
@@ -153,16 +156,16 @@ enum ControlChange {
 }
 
 impl WorkerHandle {
-    pub fn spawn<F>(preferred_hotkey: String, emit: F) -> Self
+    pub fn spawn<F>(emit: F) -> Self
     where
         F: Fn(WorkerEvent) + Send + Sync + 'static,
     {
         let builder = thread::Builder::new().name("klickmeister-worker".to_owned());
-        Self::spawn_with(builder, preferred_hotkey, Arc::new(emit))
+        Self::spawn_with(builder, Arc::new(emit))
     }
 
     /// Spawn with an injectable thread builder and report start failures as errors.
-    fn spawn_with(builder: thread::Builder, preferred_hotkey: String, emit: Emitter) -> Self {
+    fn spawn_with(builder: thread::Builder, emit: Emitter) -> Self {
         let (tx, rx) = mpsc::channel(COMMAND_CAPACITY);
         let (control, control_rx) = watch::channel(Control::default());
         let (finished_tx, finished) = std_mpsc::channel();
@@ -174,13 +177,7 @@ impl WorkerHandle {
                 let _finished = finished_tx;
                 // Runtime construction only fails for OS resource exhaustion.
                 let runtime = Builder::new_current_thread().enable_all().build();
-                let worker = run_worker(
-                    rx,
-                    control_rx,
-                    preferred_hotkey,
-                    Arc::clone(&worker_emit),
-                    worker_closing,
-                );
+                let worker = run_worker(rx, control_rx, Arc::clone(&worker_emit), worker_closing);
                 block_on_runtime(runtime, &worker_emit, worker);
             })
             .inspect_err(|error| (emit)(worker_start_failed(error)))
@@ -223,7 +220,7 @@ impl WorkerHandle {
                 from_button: true,
                 reserved: false,
             },
-            Command::ConfigureHotkey(preferred) => QueuedCommand::ConfigureHotkey(preferred),
+            Command::ConfigureHotkey => QueuedCommand::ConfigureHotkey,
         };
         self.tx.try_send(command).map_err(|error| match error {
             TrySendError::Full(_) => "Klickmeister ist ausgelastet. Versuche es erneut.",
@@ -464,10 +461,7 @@ async fn while_hotkey_open<T>(
 }
 
 /// Bind the stop hotkey on an owned connection and clean up failed or cancelled requests.
-async fn setup_hotkey(
-    preferred_hotkey: String,
-    mut cancel: oneshot::Receiver<()>,
-) -> Result<HotkeyRegistration, String> {
+async fn setup_hotkey(mut cancel: oneshot::Receiver<()>) -> Result<HotkeyRegistration, String> {
     let connection = tokio::select! {
         biased;
         _ = &mut cancel => return Err("Die Freigabe für das Tastenkürzel wurde abgebrochen.".to_owned()),
@@ -520,7 +514,7 @@ async fn setup_hotkey(
         let binding = async {
             let shortcut =
                 NewShortcut::new(HOTKEY_ID, "Automatisches Klicken starten oder stoppen")
-                    .preferred_trigger(Some(preferred_hotkey.as_str()));
+                    .preferred_trigger(Some(PREFERRED_TRIGGER));
             let response = portal
                 .bind_shortcuts(
                     owned_session,
@@ -764,7 +758,6 @@ async fn next_wake(sources: WakeSources<'_>) -> Wake {
 async fn run_worker(
     mut commands: mpsc::Receiver<QueuedCommand>,
     mut control: watch::Receiver<Control>,
-    preferred_hotkey: String,
     emit: Emitter,
     closing: Arc<AtomicBool>,
 ) {
@@ -777,7 +770,7 @@ async fn run_worker(
     let mut start_request: Option<PendingStartRequest> = None;
     let (tx, rx) = oneshot::channel();
     let mut hotkey_cancel = Some(tx);
-    let mut hotkey_task = Some(tokio::spawn(setup_hotkey(preferred_hotkey, rx)));
+    let mut hotkey_task = Some(tokio::spawn(setup_hotkey(rx)));
     let mut configure_task: Option<JoinHandle<Result<(), String>>> = None;
     let mut hotkey: Option<HotkeyState> = None;
     let mut hotkey_bound = false;
@@ -903,7 +896,7 @@ async fn run_worker(
                             start_task = Some(tokio::spawn(setup_click_session(settings, delay, rx)));
                         }
                     }
-                    QueuedCommand::ConfigureHotkey(preferred) => {
+                    QueuedCommand::ConfigureHotkey => {
                         if configure_task.is_some() || hotkey_task.is_some() {
                             continue;
                         }
@@ -935,7 +928,7 @@ async fn run_worker(
                         } else {
                             let (tx, rx) = oneshot::channel();
                             hotkey_cancel = Some(tx);
-                            hotkey_task = Some(tokio::spawn(setup_hotkey(preferred, rx)));
+                            hotkey_task = Some(tokio::spawn(setup_hotkey(rx)));
                             (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Registering));
                             (emit)(WorkerEvent::Status("Tastenkürzel wird eingerichtet …".to_owned()));
                         }
@@ -1554,7 +1547,7 @@ mod tests {
         let (emit, events) = recording_emitter();
         // An impossible stack size makes spawning fail without exhausting resources.
         let builder = thread::Builder::new().stack_size(usize::MAX);
-        let worker = WorkerHandle::spawn_with(builder, String::new(), emit);
+        let worker = WorkerHandle::spawn_with(builder, emit);
         assert!(worker.join.is_none());
         let reported: Vec<_> = events.try_iter().collect();
         assert!(matches!(
@@ -1616,10 +1609,7 @@ mod tests {
         let (worker, mut side) = WorkerHandle::stalled(2);
         assert_eq!(worker.send(Command::Start(settings())), Ok(()));
         assert_eq!(worker.send(Command::StartFromButton(settings())), Ok(()));
-        assert_eq!(
-            worker.send(Command::ConfigureHotkey(String::new())),
-            QUEUE_FULL
-        );
+        assert_eq!(worker.send(Command::ConfigureHotkey), QUEUE_FULL);
         assert_eq!(worker.send(Command::Stop), Ok(()));
         assert_eq!(take_control_change(&mut side.control), ControlChange::Stop);
         // Both kinds of start from before Stop are dropped by the worker.

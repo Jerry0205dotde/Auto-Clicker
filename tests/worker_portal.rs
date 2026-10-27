@@ -38,6 +38,8 @@ struct Observed {
     reject_registration: bool,
     hotkey_session: String,
     hotkey_created: usize,
+    /// `preferred_trigger` of every BindShortcuts call.
+    preferred_triggers: Vec<Option<String>>,
     reject_hotkey: bool,
     empty_hotkey_trigger: bool,
     hotkey_version: Option<u32>,
@@ -285,12 +287,22 @@ impl FakeHotkeys {
     async fn bind_shortcuts(
         &self,
         _session: OwnedObjectPath,
-        _shortcuts: Vec<(String, Options)>,
+        shortcuts: Vec<(String, Options)>,
         _parent: String,
         options: Options,
         #[zbus(connection)] connection: &zbus::Connection,
         #[zbus(header)] header: zbus::message::Header<'_>,
     ) -> zbus::fdo::Result<OwnedObjectPath> {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .preferred_triggers
+            .extend(shortcuts.iter().map(|(_, shortcut)| {
+                shortcut
+                    .get("preferred_trigger")
+                    .and_then(|value| <&str>::try_from(value).ok())
+                    .map(str::to_owned)
+            }));
         let (delay, seen, release) = {
             let state = self.0.lock().unwrap_or_else(|e| e.into_inner());
             (
@@ -738,7 +750,7 @@ async fn revoked_hotkey_registration(after_response: bool, stall_close: bool) ->
     };
     let service = fake_portal(&observed).await?;
     let (tx, mut events) = mpsc::unbounded_channel();
-    let worker = WorkerHandle::spawn("Pause".into(), move |event| {
+    let worker = WorkerHandle::spawn(move |event| {
         let _ = tx.send(event);
     });
     let result: TestResult = async {
@@ -798,7 +810,7 @@ async fn revoked_hotkey_registration(after_response: bool, stall_close: bool) ->
             }
         }
         ensure(events.try_recv().is_err(), "a late bind response published a worker event")?;
-        worker.send(Command::ConfigureHotkey("Pause".into()))?;
+        worker.send(Command::ConfigureHotkey)?;
         event(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Registering))).await?;
         event(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Ready))).await?;
         {
@@ -874,7 +886,7 @@ async fn hotkey_can_be_registered_again_after_rejection_and_session_loss() -> Te
         monitor: None,
     };
     let (tx, mut events) = mpsc::unbounded_channel();
-    let worker = WorkerHandle::spawn("Pause".into(), move |event| {
+    let worker = WorkerHandle::spawn(move |event| {
         let _ = tx.send(event);
     });
     let result: TestResult = async {
@@ -888,10 +900,10 @@ async fn hotkey_can_be_registered_again_after_rejection_and_session_loss() -> Te
             state.delay_hotkey = true;
             (state.hotkey_seen.clone(), state.hotkey_release.clone())
         };
-        worker.send(Command::ConfigureHotkey("Pause".into()))?;
+        worker.send(Command::ConfigureHotkey)?;
         event(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Registering))).await?;
         timeout(Duration::from_secs(3), seen.notified()).await?;
-        worker.send(Command::ConfigureHotkey("Pause".into()))?;
+        worker.send(Command::ConfigureHotkey)?;
         worker.send(Command::Start(settings.clone()))?;
         event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Tastenkürzel für Start und Stopp"))).await?;
         assert_eq!(observed.lock().unwrap_or_else(|e| e.into_inner()).hotkey_created, 2);
@@ -917,7 +929,7 @@ async fn hotkey_can_be_registered_again_after_rejection_and_session_loss() -> Te
             state.delay_hotkey = false;
             state.empty_hotkey_trigger = true;
         }
-        worker.send(Command::ConfigureHotkey("Pause".into()))?;
+        worker.send(Command::ConfigureHotkey)?;
         event(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable))).await?;
         event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Kein Tastenkürzel für Start und Stopp"))).await?;
         {
@@ -931,7 +943,7 @@ async fn hotkey_can_be_registered_again_after_rejection_and_session_loss() -> Te
             state.empty_hotkey_trigger = false;
             (state.configure_seen.clone(), state.configure_release.clone())
         };
-        worker.send(Command::ConfigureHotkey("Pause".into()))?;
+        worker.send(Command::ConfigureHotkey)?;
         event(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Configuring(false)))).await?;
         timeout(Duration::from_secs(3), seen.notified()).await?;
         shortcuts_changed(&service, &session, "Pause").await?;
@@ -943,10 +955,10 @@ async fn hotkey_can_be_registered_again_after_rejection_and_session_loss() -> Te
             let state = observed.lock().unwrap_or_else(|e| e.into_inner());
             (state.configure_seen.clone(), state.configure_release.clone())
         };
-        worker.send(Command::ConfigureHotkey("Pause".into()))?;
+        worker.send(Command::ConfigureHotkey)?;
         event(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Configuring(true)))).await?;
         timeout(Duration::from_secs(3), seen.notified()).await?;
-        worker.send(Command::ConfigureHotkey("Pause".into()))?;
+        worker.send(Command::ConfigureHotkey)?;
         worker.send(Command::Start(settings.clone()))?;
         event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Tastenkürzel für Start und Stopp"))).await?;
         release.notify_one();
@@ -964,7 +976,7 @@ async fn hotkey_can_be_registered_again_after_rejection_and_session_loss() -> Te
         assert_hotkey_only(&events_until(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("entfernt"))).await?);
         worker.send(Command::Start(settings))?;
         event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Tastenkürzel für Start und Stopp"))).await?;
-        worker.send(Command::ConfigureHotkey("Pause".into()))?;
+        worker.send(Command::ConfigureHotkey)?;
         event(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Configuring(false)))).await?;
         let (seen, release) = {
             let state = observed.lock().unwrap_or_else(|e| e.into_inner());
@@ -999,64 +1011,71 @@ async fn unbound_v1_hotkey_can_be_retried_without_configure_shortcuts() -> TestR
     }
     let service = fake_portal(&observed).await?;
     let (tx, mut events) = mpsc::unbounded_channel();
-    let worker = WorkerHandle::spawn("Pause".into(), move |event| {
+    let worker = WorkerHandle::spawn(move |event| {
         let _ = tx.send(event);
     });
-    let result: TestResult =
-        async {
-            event(&mut events, |e| {
-            matches!(e, WorkerEvent::Error(message) if message.contains("Kein Tastenkürzel"))
-        }).await?;
-            let (seen, release) = {
-                let mut state = observed.lock().unwrap_or_else(|e| e.into_inner());
-                state.empty_hotkey_trigger = false;
-                state.delay_hotkey = true;
-                (state.hotkey_seen.clone(), state.hotkey_release.clone())
-            };
-            worker.send(Command::ConfigureHotkey("Pause".into()))?;
-            event(&mut events, |e| {
-                matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Registering))
-            })
-            .await?;
-            timeout(Duration::from_secs(3), seen.notified()).await?;
-            {
-                let state = observed.lock().unwrap_or_else(|e| e.into_inner());
-                ensure(
-                    state.hotkey_created == 2,
-                    "retry must create a fresh v1 session",
-                )?;
-                ensure(
-                    state.closed == 1,
-                    "retry must close the old unbound session",
-                )?;
-                ensure(
-                    state.configure_calls == 0,
-                    "v1 must never call ConfigureShortcuts",
-                )?;
-            }
-            worker.send(Command::Start(continuous()))?;
-            event(&mut events, |e| {
+    let result: TestResult = async {
+        event(
+            &mut events,
+            |e| matches!(e, WorkerEvent::Error(message) if message.contains("Kein Tastenkürzel")),
+        )
+        .await?;
+        let (seen, release) = {
+            let mut state = observed.lock().unwrap_or_else(|e| e.into_inner());
+            state.empty_hotkey_trigger = false;
+            state.delay_hotkey = true;
+            (state.hotkey_seen.clone(), state.hotkey_release.clone())
+        };
+        worker.send(Command::ConfigureHotkey)?;
+        event(&mut events, |e| {
+            matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Registering))
+        })
+        .await?;
+        timeout(Duration::from_secs(3), seen.notified()).await?;
+        {
+            let state = observed.lock().unwrap_or_else(|e| e.into_inner());
+            ensure(
+                state.hotkey_created == 2,
+                "retry must create a fresh v1 session",
+            )?;
+            ensure(
+                state.closed == 1,
+                "retry must close the old unbound session",
+            )?;
+            ensure(
+                state.configure_calls == 0,
+                "v1 must never call ConfigureShortcuts",
+            )?;
+            // Issue #76: KDE only parses the XDG format, never a
+            // localized description such as "Strg+F8".
+            ensure(
+                state.preferred_triggers == [Some("Pause".to_owned()), Some("Pause".to_owned())],
+                "every BindShortcuts must suggest the XDG trigger Pause",
+            )?;
+        }
+        worker.send(Command::Start(continuous()))?;
+        event(&mut events, |e| {
             matches!(e, WorkerEvent::Error(message) if message.contains("Richte vor dem Start"))
         }).await?;
-            release.notify_one();
-            event(&mut events, |e| {
-                matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Ready))
-            })
-            .await?;
-            worker.send(Command::Start(ClickSettings {
-                repeat: Some(1),
-                ..continuous()
-            }))?;
-            event(&mut events, |e| {
-                matches!(e, WorkerEvent::State(RunState::Stopped))
-            })
-            .await?;
-            ensure(
-                presses(&observed) == 1,
-                "the recovered binding must allow a click run",
-            )
-        }
-        .await;
+        release.notify_one();
+        event(&mut events, |e| {
+            matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Ready))
+        })
+        .await?;
+        worker.send(Command::Start(ClickSettings {
+            repeat: Some(1),
+            ..continuous()
+        }))?;
+        event(&mut events, |e| {
+            matches!(e, WorkerEvent::State(RunState::Stopped))
+        })
+        .await?;
+        ensure(
+            presses(&observed) == 1,
+            "the recovered binding must allow a click run",
+        )
+    }
+    .await;
     tokio::task::spawn_blocking(move || worker.shutdown()).await?;
     service.close().await?;
     result
@@ -1097,7 +1116,7 @@ async fn portal_restart_once(loss: PortalLoss) -> TestResult {
     // The name passes on directly, without a moment in which it has no owner.
     let replacement = queued_fake_portal(&fresh).await?;
     let (tx, mut events) = mpsc::unbounded_channel();
-    let worker = WorkerHandle::spawn("Pause".into(), move |event| {
+    let worker = WorkerHandle::spawn(move |event| {
         let _ = tx.send(event);
     });
     let result: TestResult = async {
@@ -1202,7 +1221,7 @@ async fn portal_restart_once(loss: PortalLoss) -> TestResult {
         )?;
 
         // "Erneut versuchen" registers with the new portal and allows runs again.
-        worker.send(Command::ConfigureHotkey("Pause".into()))?;
+        worker.send(Command::ConfigureHotkey)?;
         event(&mut events, |e| {
             matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Ready))
         })
@@ -1244,7 +1263,7 @@ async fn portal_lost_during_hotkey_session_creation_allows_retry() -> TestResult
     let fresh = Shared::default();
     let replacement = queued_fake_portal(&fresh).await?;
     let (tx, mut events) = mpsc::unbounded_channel();
-    let worker = WorkerHandle::spawn("Pause".into(), move |event| {
+    let worker = WorkerHandle::spawn(move |event| {
         let _ = tx.send(event);
     });
     let result: TestResult = async {
@@ -1255,7 +1274,7 @@ async fn portal_lost_during_hotkey_session_creation_allows_retry() -> TestResult
         assert_hotkey_only(
             &events_until(&mut events, |e| matches!(e, WorkerEvent::Error(_))).await?,
         );
-        worker.send(Command::ConfigureHotkey("Pause".into()))?;
+        worker.send(Command::ConfigureHotkey)?;
         event(&mut events, |e| {
             matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Ready))
         })
@@ -1314,7 +1333,7 @@ async fn revocation_ends_start_while_response_is_pending() -> TestResult {
         monitor: None,
     };
     let (tx, mut events) = mpsc::unbounded_channel();
-    let worker = WorkerHandle::spawn("Pause".into(), move |event| {
+    let worker = WorkerHandle::spawn(move |event| {
         let _ = tx.send(event);
     });
     let (seen, release) = {
@@ -1367,7 +1386,7 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
         monitor: None,
     };
     let (tx, mut events) = mpsc::unbounded_channel();
-    let worker = WorkerHandle::spawn("Pause".into(), move |event| {
+    let worker = WorkerHandle::spawn(move |event| {
         let _ = tx.send(event);
     });
     let result: TestResult = async {
@@ -1721,7 +1740,7 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
                     interval_ms: 100, button: MouseButton::Left, click_type: ClickType::Single,
                     repeat: Some(1), position: None, monitor: None,
                 };
-                let pending_worker = WorkerHandle::spawn("Pause".into(), move |event| {
+                let pending_worker = WorkerHandle::spawn(move |event| {
                     let _ = tx.send(event);
                 });
                 if !hotkey_pending {
@@ -1992,7 +2011,7 @@ async fn every_owned_portal_connection_registers_the_app_before_creating_session
         .require_registration = true;
     let service = fake_portal(&observed).await?;
     let (tx, mut events) = mpsc::unbounded_channel();
-    let worker = WorkerHandle::spawn("Pause".into(), move |event| {
+    let worker = WorkerHandle::spawn(move |event| {
         let _ = tx.send(event);
     });
     let result: TestResult = async {
@@ -2059,7 +2078,7 @@ async fn denied_app_registration_does_not_create_portal_sessions() -> TestResult
         .reject_registration = true;
     let service = fake_portal(&observed).await?;
     let (tx, mut events) = mpsc::unbounded_channel();
-    let worker = WorkerHandle::spawn("Pause".into(), move |event| {
+    let worker = WorkerHandle::spawn(move |event| {
         let _ = tx.send(event);
     });
     let result: TestResult = async {
@@ -2093,7 +2112,7 @@ async fn fixed_position_selects_its_monitor_from_kde_output_streams() -> TestRes
         }
         let service = fake_portal(&observed).await?;
         let (tx, mut events) = mpsc::unbounded_channel();
-        let worker = WorkerHandle::spawn("Pause".into(), move |event| {
+        let worker = WorkerHandle::spawn(move |event| {
             let _ = tx.send(event);
         });
         let result: TestResult = async {
@@ -2217,7 +2236,7 @@ async fn invalid_monitor_streams_close_without_any_input() -> TestResult {
             .monitor_streams = Some(streams);
         let service = fake_portal(&observed).await?;
         let (tx, mut events) = mpsc::unbounded_channel();
-        let worker = WorkerHandle::spawn("Pause".into(), move |event| {
+        let worker = WorkerHandle::spawn(move |event| {
             let _ = tx.send(event);
         });
         let result: TestResult = async {
@@ -2343,7 +2362,7 @@ async fn stop_overtakes_a_full_command_queue_once() -> TestResult {
     let observed = Shared::default();
     let service = fake_portal(&observed).await?;
     let (tx, mut events) = mpsc::unbounded_channel();
-    let worker = WorkerHandle::spawn("Pause".into(), move |event| {
+    let worker = WorkerHandle::spawn(move |event| {
         let _ = tx.send(event);
     });
     let result: TestResult = async {
@@ -2423,7 +2442,7 @@ async fn shutdown_overtakes_a_full_command_queue_once() -> TestResult {
     let observed = Shared::default();
     let service = fake_portal(&observed).await?;
     let (tx, mut events) = mpsc::unbounded_channel();
-    let worker = WorkerHandle::spawn("Pause".into(), move |event| {
+    let worker = WorkerHandle::spawn(move |event| {
         let _ = tx.send(event);
     });
     let prepared = async {
@@ -2520,7 +2539,7 @@ async fn button_countdown_delays_first_click_and_stop_cancels_it() -> TestResult
         monitor: None,
     };
     let (tx, mut events) = mpsc::unbounded_channel();
-    let worker = WorkerHandle::spawn("Pause".into(), move |event| {
+    let worker = WorkerHandle::spawn(move |event| {
         let _ = tx.send(event);
     });
     let result: TestResult = async {
@@ -2748,7 +2767,7 @@ async fn buffered_key_presses_once(stop_button: bool) -> TestResult {
     let observed = Shared::default();
     let service = fake_portal(&observed).await?;
     let (tx, mut events) = mpsc::unbounded_channel();
-    let worker = WorkerHandle::spawn("Pause".into(), move |event| {
+    let worker = WorkerHandle::spawn(move |event| {
         let _ = tx.send(event);
     });
     let result: TestResult = async {
@@ -2814,7 +2833,7 @@ async fn key_press_after_stop_starts_again() -> TestResult {
     let observed = Shared::default();
     let service = fake_portal(&observed).await?;
     let (tx, mut events) = mpsc::unbounded_channel();
-    let worker = WorkerHandle::spawn("Pause".into(), move |event| {
+    let worker = WorkerHandle::spawn(move |event| {
         let _ = tx.send(event);
     });
     let result: TestResult = async {
@@ -2880,7 +2899,7 @@ async fn old_key_press_stops_once() -> TestResult {
     let observed = Shared::default();
     let service = fake_portal(&observed).await?;
     let (tx, mut events) = mpsc::unbounded_channel();
-    let worker = WorkerHandle::spawn("Pause".into(), move |event| {
+    let worker = WorkerHandle::spawn(move |event| {
         let _ = tx.send(event);
     });
     let result: TestResult = async {
@@ -2946,7 +2965,7 @@ async fn changes_behind_key_presses_once() -> TestResult {
     let observed = Shared::default();
     let service = fake_portal(&observed).await?;
     let (tx, mut events) = mpsc::unbounded_channel();
-    let worker = WorkerHandle::spawn("Pause".into(), move |event| {
+    let worker = WorkerHandle::spawn(move |event| {
         let _ = tx.send(event);
     });
     let result: TestResult = async {
@@ -3026,7 +3045,7 @@ async fn presses_sent_before_the_portal_reply_stay_old_when_read_later() -> Test
     let observed = Shared::default();
     let service = fake_portal(&observed).await?;
     let (tx, mut events) = mpsc::unbounded_channel();
-    let worker = WorkerHandle::spawn("Pause".into(), move |event| {
+    let worker = WorkerHandle::spawn(move |event| {
         let _ = tx.send(event);
     });
     let result: TestResult = async {
@@ -3144,7 +3163,7 @@ async fn presses_before_run_end_once(by_error: bool) -> TestResult {
     let observed = Shared::default();
     let service = fake_portal(&observed).await?;
     let (tx, mut events) = mpsc::unbounded_channel();
-    let worker = WorkerHandle::spawn("Pause".into(), move |event| {
+    let worker = WorkerHandle::spawn(move |event| {
         let _ = tx.send(event);
     });
     let result: TestResult = async {
@@ -3268,7 +3287,7 @@ async fn cancelled_gui_start_once(cancellation: GuiCancellation) -> TestResult {
     let observed = Shared::default();
     let service = fake_portal(&observed).await?;
     let (tx, mut events) = mpsc::unbounded_channel();
-    let worker = WorkerHandle::spawn("Pause".into(), move |event| {
+    let worker = WorkerHandle::spawn(move |event| {
         let _ = tx.send(event);
     });
     let result: TestResult = async {
@@ -3294,7 +3313,7 @@ async fn cancelled_gui_start_once(cancellation: GuiCancellation) -> TestResult {
             GuiCancellation::SecondPress => {
                 shortcut_signal(&service, &session, "Activated", 2).await?;
             }
-            GuiCancellation::Configure => worker.send(Command::ConfigureHotkey("Pause".into()))?,
+            GuiCancellation::Configure => worker.send(Command::ConfigureHotkey)?,
             GuiCancellation::Rebind => shortcuts_changed(&service, session.as_str(), "F8").await?,
             GuiCancellation::Remove => shortcuts_changed(&service, session.as_str(), "").await?,
             GuiCancellation::SessionClosed => {
@@ -3367,7 +3386,7 @@ async fn cancelled_gui_start_once(cancellation: GuiCancellation) -> TestResult {
                 .await?;
             }
             GuiCancellation::SessionClosed => {
-                worker.send(Command::ConfigureHotkey("Pause".into()))?;
+                worker.send(Command::ConfigureHotkey)?;
                 event(&mut events, |e| {
                     matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Ready))
                 })
@@ -3451,7 +3470,7 @@ async fn rejected_selection_once(sources: bool, fixed: bool, status: u32) -> Tes
     }
     let service = fake_portal(&observed).await?;
     let (tx, mut events) = mpsc::unbounded_channel();
-    let worker = WorkerHandle::spawn("Pause".into(), move |event| {
+    let worker = WorkerHandle::spawn(move |event| {
         let _ = tx.send(event);
     });
     let result: TestResult = async {

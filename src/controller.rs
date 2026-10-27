@@ -350,10 +350,9 @@ impl qobject::AppController {
         if let Some(error) = self.as_mut().rust_mut().get_mut().startup_error.take() {
             self.as_mut().set_error_message(QString::from(&error));
         }
-        let preferred_hotkey = self.hotkey().to_string();
         let worker_epoch = self.as_mut().rust_mut().get_mut().next_worker_epoch();
         let qt_thread = self.qt_thread();
-        let worker = WorkerHandle::spawn(preferred_hotkey, move |event| {
+        let worker = WorkerHandle::spawn(move |event| {
             let _ = qt_thread.queue(move |mut controller| {
                 controller.as_mut().handle_worker_event(worker_epoch, event);
             });
@@ -413,9 +412,7 @@ impl qobject::AppController {
         if !*self.hotkey_ready() {
             self.as_mut().clear_error();
         }
-        let preferred = self.hotkey().to_string();
-        self.as_mut()
-            .send_command(Command::ConfigureHotkey(preferred));
+        self.as_mut().send_command(Command::ConfigureHotkey);
     }
 
     /// Dismiss the current user-visible error message.
