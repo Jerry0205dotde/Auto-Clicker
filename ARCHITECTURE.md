@@ -1,15 +1,22 @@
 # Architektur
 
-Klickmeister ist ein einzelner Prozess mit zwei Ausführungskontexten:
+Klickmeister ist ein einzelner Prozess mit drei Ausführungskontexten:
 
 1. Der Qt-Thread besitzt das Kirigami-Fenster und alle GUI-Objekte.
 2. Ein Rust-Worker besitzt die Portal-Sitzungen, den Zustandsautomaten und den Scheduler.
+3. Ein Instanz-Thread hält nur die D-Bus-Verbindung der Einzelinstanzsperre (siehe [Einzelinstanz](#einzelinstanz)).
 
 Zwischen beiden Richtungen laufen begrenzte Nachrichtenkanäle beziehungsweise in den Qt-Event-Loop eingereihte Zustandsupdates. Stop und Shutdown umgehen den begrenzten Befehlskanal über ein Ein-Wert-Signal, das der Worker vor allen anderen Ereignissen prüft; sie kommen deshalb auch bei vollem Kanal an. Startbefehle, die vor einem Stop eingereiht wurden, verwirft der Worker danach. Ein fehlgeschlagener Versand ändert den angezeigten Laufstatus nur, wenn der Worker beendet ist. Alle Startquellen gehen durch denselben Zustandsautomaten; deshalb kann höchstens ein Scheduler aktiv sein.
 
 Jeder Startbefehl liefert die aktuellen, validierten Einstellungen. Eine ausstehende Portal-Aufgabe besitzt diese Einstellungen bis zur Freigabe; weitere Startbefehle können sie nicht überschreiben. Der Worker hält keinen Einstellungs-Cache für spätere Starts.
 
 Ein Hotkey-Start reserviert im Worker bereits `Starting`, bevor Qt die aktuellen Eingaben sammelt. Jede Aktivierung besitzt einen eigenen einmalig verwendbaren Antwortkanal und die Stop-Generation zum Zeitpunkt der Aktivierung. Stop, ein weiterer Tastendruck sowie Änderungen oder das Ende der Hotkey-Freigabe verwerfen die ausstehende Antwort; eine verspätete GUI-Antwort kann dadurch auch keinen späteren Start übernehmen. Kann Qt wegen Positionsauswahl, ungültiger Eingaben oder eines nicht mehr verfügbaren Controllers nicht antworten, beendet das Verwerfen der Anfrage die Reservierung. Die Antwort umgeht den begrenzten Befehlskanal, sodass ein voller Kanal keine abgelehnte Anfrage festhalten kann.
+
+## Einzelinstanz
+
+KDE leitet einen Druck auf das globale Tastenkürzel an jede GlobalShortcuts-Sitzung mit derselben App-ID weiter. Zwei Instanzen würden mit einem Tastendruck die eine stoppen und die andere starten. Vor dem Laden der QML-Oberfläche und damit vor jeder Portalsitzung beansprucht `main` deshalb über `instance::claim` den D-Bus-Namen `io.github.jerry0205.klickmeister` mit `DoNotQueue`. Ein eigener Thread hält diese Verbindung und bietet unter `/io/github/jerry0205/klickmeister` die Methode `org.freedesktop.Application.Activate` an. Die Sperre hängt am Prozess: Der Bus gibt den Namen frei, sobald die Verbindung endet, auch nach einem Absturz oder beim direkten Start der Binärdatei. Beim regulären Ende wird er nach dem Worker-Shutdown freigegeben, also nachdem die Portal-Sitzungen geschlossen sind.
+
+Ist der Name belegt, ruft der neue Prozess `Activate` mit seinem Wayland-Aktivierungstoken (`XDG_ACTIVATION_TOKEN`, vor dem Qt-Start gelesen) auf und beendet sich. Die laufende Instanz reicht die Anfrage in den Qt-Event-Loop. Dort setzt sie das Token kurzzeitig als Umgebungsvariable, die Qt Wayland in `requestActivate()` an xdg-activation übergibt, und aktiviert das Hauptfenster oder einen offenen Positionswähler. Erst wenn ein sichtbares Fenster aktiviert wurde, antwortet sie erfolgreich. Ist das Fenster bereits geschlossen oder antwortet der Qt-Thread nicht innerhalb von 2 Sekunden, etwa während des begrenzten Worker-Shutdowns, schlägt der Aufruf fehl. Der neue Prozess versucht dann bis zu 10 Sekunden lang erneut, den Namen zu übernehmen. Ohne erreichbaren Session-Bus startet Klickmeister ohne Sperre; die Portale sind dann ebenfalls nicht erreichbar. `--smoke-test` beansprucht den Namen nicht.
 
 ## Wayland-Backend
 

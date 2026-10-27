@@ -12,5 +12,6 @@ Categories=Utility;Accessibility;
 Keywords=click;mouse;automation;wayland;
 Keywords[de]=Klick;Maus;Automatisierung;Wayland;
 StartupNotify=true
+SingleMainWindow=true
 DBusActivatable=false
 X-KDE-FormFactor=desktop
