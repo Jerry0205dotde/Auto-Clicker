@@ -20,6 +20,8 @@ Exportiert wird nur `org.freedesktop.Application.Activate` unter dem Busnamen `i
 
 Sitzungen verwenden `PersistMode::Application`: keine anwendungsseitig gespeicherten Restore-Tokens und keine dauerhafte Berechtigung nach Prozessende.
 
+Die RemoteDesktop-Sitzung bleibt nach einem Lauf höchstens 60 Sekunden ungenutzt bestehen, damit ein erneuter Start ohne Dialog auskommt. Solange zeigt KDE das Statussymbol „Fernsteuerung“, und bei fester Position bleiben die Monitor-Streams aller Ausgänge freigegeben. Danach schließt der Worker die Sitzung. „Beenden“ im Statussymbol schließt sie sofort; der Worker verwirft sie dann und fordert beim nächsten Start eine neue an.
+
 ## 3. Netzwerkzugriffe
 
 Keine. Der Produktionscode enthält keine HTTP-, TCP-, UDP- oder DNS-API. D-Bus nutzt ausschließlich den lokalen Unix-Session-Bus. Cargo kann beim Bauen checksummengeprüften Quellcode beziehen; das ist kein Laufzeitverhalten der Anwendung.

@@ -55,6 +55,10 @@ const HOTKEY_ID: &str = "toggle-clicking";
 const HOTKEY_SESSION_CLOSED: &str =
     "Die Freigabe für das Tastenkürzel wurde beendet. Wähle „Erneut versuchen“.";
 const BUTTON_START_DELAY_SECS: u8 = 3;
+/// How long the mouse permission outlives a run. A start within this time
+/// needs no new KDE dialog; afterwards KDE's remote control indicator and any
+/// monitor streams end.
+const CLICK_SESSION_IDLE: Duration = Duration::from_secs(60);
 /// Suggested key in the XDG shortcut format. The saved hotkey is KDE's
 /// localized description ("Strg+F8") and only fit for display.
 const PREFERRED_TRIGGER: &str = "Pause";
@@ -160,12 +164,20 @@ impl WorkerHandle {
     where
         F: Fn(WorkerEvent) + Send + Sync + 'static,
     {
+        Self::spawn_with_session_idle(emit, CLICK_SESSION_IDLE)
+    }
+
+    /// Like `spawn`, but close an unused mouse permission after `session_idle`.
+    pub fn spawn_with_session_idle<F>(emit: F, session_idle: Duration) -> Self
+    where
+        F: Fn(WorkerEvent) + Send + Sync + 'static,
+    {
         let builder = thread::Builder::new().name("klickmeister-worker".to_owned());
-        Self::spawn_with(builder, Arc::new(emit))
+        Self::spawn_with(builder, Arc::new(emit), session_idle)
     }
 
     /// Spawn with an injectable thread builder and report start failures as errors.
-    fn spawn_with(builder: thread::Builder, emit: Emitter) -> Self {
+    fn spawn_with(builder: thread::Builder, emit: Emitter, session_idle: Duration) -> Self {
         let (tx, rx) = mpsc::channel(COMMAND_CAPACITY);
         let (control, control_rx) = watch::channel(Control::default());
         let (finished_tx, finished) = std_mpsc::channel();
@@ -177,7 +189,13 @@ impl WorkerHandle {
                 let _finished = finished_tx;
                 // Runtime construction only fails for OS resource exhaustion.
                 let runtime = Builder::new_current_thread().enable_all().build();
-                let worker = run_worker(rx, control_rx, Arc::clone(&worker_emit), worker_closing);
+                let worker = run_worker(
+                    rx,
+                    control_rx,
+                    Arc::clone(&worker_emit),
+                    worker_closing,
+                    session_idle,
+                );
                 block_on_runtime(runtime, &worker_emit, worker);
             })
             .inspect_err(|error| (emit)(worker_start_failed(error)))
@@ -695,6 +713,7 @@ async fn register_hotkey_watcher(
 enum Wake {
     Control(Result<(), watch::error::RecvError>),
     ClickSessionClosed,
+    ClickSessionIdle,
     Command(Option<QueuedCommand>),
     StartReply(Result<ClickSettings, oneshot::error::RecvError>),
     StartTask(Result<Result<StartedSession, String>, tokio::task::JoinError>),
@@ -717,6 +736,7 @@ struct WakeSources<'a> {
     hotkey: &'a mut Option<HotkeyState>,
     countdown: Option<Instant>,
     tick: Option<Instant>,
+    session_idle: Option<Instant>,
 }
 
 /// Wait for the next event. Stop and Shutdown are checked first, so they
@@ -733,6 +753,7 @@ async fn next_wake(sources: WakeSources<'_>) -> Wake {
         hotkey,
         countdown,
         tick,
+        session_idle,
     } = sources;
     tokio::select! {
         biased;
@@ -751,6 +772,7 @@ async fn next_wake(sources: WakeSources<'_>) -> Wake {
         signal = next_hotkey(hotkey), if hotkey.is_some() => Wake::Hotkey(signal),
         () = wait_for_tick(countdown), if countdown.is_some() => Wake::CountdownTick,
         () = wait_for_tick(tick), if tick.is_some() => Wake::ClickTick,
+        () = wait_for_tick(session_idle), if session_idle.is_some() => Wake::ClickSessionIdle,
     }
 }
 
@@ -760,9 +782,11 @@ async fn run_worker(
     mut control: watch::Receiver<Control>,
     emit: Emitter,
     closing: Arc<AtomicBool>,
+    session_idle: Duration,
 ) {
     let mut machine = StateMachine::default();
     let mut click_session: Option<PortalClickSession> = None;
+    let mut click_session_idle: Option<Instant> = None;
     let mut active: Option<ActiveRun> = None;
     let mut countdown: Option<PendingCountdown> = None;
     let mut start_task: Option<JoinHandle<Result<StartedSession, String>>> = None;
@@ -800,6 +824,14 @@ async fn run_worker(
                     .arm(Box::pin(portal_reply_position(portal, owner)));
             }
         }
+        // The idle time of the mouse permission starts when a run ends.
+        click_session_idle = if click_session.is_none()
+            || matches!(machine.state(), RunState::Starting | RunState::Clicking)
+        {
+            None
+        } else {
+            click_session_idle.or_else(|| Some(Instant::now() + session_idle))
+        };
         let wake = next_wake(WakeSources {
             control: &mut control,
             click_session: &mut click_session,
@@ -811,6 +843,7 @@ async fn run_worker(
             hotkey: &mut hotkey,
             countdown: countdown.as_ref().map(|pending| pending.next_tick),
             tick: active.as_ref().map(|run| run.next_tick),
+            session_idle: click_session_idle,
         })
         .await;
         let wake = match wake {
@@ -844,6 +877,12 @@ async fn run_worker(
             }
             Wake::ClickSessionClosed => {
                 discard_closed_click_session(&mut click_session, &mut machine, &mut active, &mut countdown, &emit).await;
+            }
+            Wake::ClickSessionIdle => {
+                click_session_idle = None;
+                if let Some(session) = click_session.take() {
+                    session.close().await;
+                }
             }
             Wake::Command(command) => {
                 let Some(command) = command else { break; };
@@ -1547,7 +1586,7 @@ mod tests {
         let (emit, events) = recording_emitter();
         // An impossible stack size makes spawning fail without exhausting resources.
         let builder = thread::Builder::new().stack_size(usize::MAX);
-        let worker = WorkerHandle::spawn_with(builder, emit);
+        let worker = WorkerHandle::spawn_with(builder, emit, CLICK_SESSION_IDLE);
         assert!(worker.join.is_none());
         let reported: Vec<_> = events.try_iter().collect();
         assert!(matches!(
@@ -1685,6 +1724,7 @@ mod tests {
             hotkey: &mut None,
             countdown,
             tick,
+            session_idle: None,
         })
         .now_or_never()
     }
