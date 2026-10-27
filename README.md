@@ -82,6 +82,8 @@ Eine feste Position bleibt mit ihrem Bildschirm gespeichert. Ändern sich Auflö
 
 KDE fragt nach Freigaben für das globale Tastenkürzel und die Maussteuerung. Bei einer festen Position kommt eine Bildschirmfreigabe für die Monitor-Streams aller Ausgänge hinzu, damit Klickmeister die Koordinaten eindeutig zuordnen kann. Verwendet werden nur die Monitorinformationen; Bild- oder Videodaten werden nicht gelesen.
 
+Nach einem Lauf bleibt die Freigabe für die Maussteuerung noch 60 Sekunden bestehen, bei fester Position zusammen mit der Bildschirmfreigabe. Ein erneuter Start in dieser Zeit kommt ohne KDE-Dialog aus. Danach beendet Klickmeister die Freigaben, und der nächste Start fragt erneut. Solange die Freigabe besteht, zeigt KDE in der Systemleiste das Symbol „Fernsteuerung“. Dessen Aktion **Beenden** hebt die Freigabe sofort auf. Klickmeister zeigt dann „Freigabe erneut erforderlich“, und der nächste Start fragt wieder nach.
+
 Klickmeister liest keine Tastatureingaben, Passwörter oder Zwischenablagen und fordert keine Screenshots an. Gespeichert werden nur die Einstellungen. Die Anwendung erfasst keine Nutzungsdaten oder Telemetrie und benötigt keinen Netzwerkzugriff.
 
 Mit dem Schließen des Fensters endet die Anwendung einschließlich ihrer Freigaben. Es gibt keinen Hintergrunddienst und keinen Autostart.

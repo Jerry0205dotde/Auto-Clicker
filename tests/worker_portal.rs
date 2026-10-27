@@ -2885,6 +2885,95 @@ async fn key_press_after_stop_starts_again() -> TestResult {
     result
 }
 
+/// An unused mouse permission ends after the idle time, so KDE's remote
+/// control indicator does not stay up between runs. A start within that time
+/// reuses the session, a later one asks for a new one.
+#[tokio::test]
+#[ignore = "requires a private D-Bus session via dbus-run-session"]
+async fn idle_mouse_permission_closes_until_the_next_start() -> TestResult {
+    let _bus_guard = BUS_TEST_LOCK.lock().await;
+    let observed = Shared::default();
+    let service = fake_portal(&observed).await?;
+    let idle = Duration::from_millis(500);
+    let (tx, mut events) = mpsc::unbounded_channel();
+    let worker = WorkerHandle::spawn_with_session_idle(
+        move |event| {
+            let _ = tx.send(event);
+        },
+        idle,
+    );
+    let remote = |observed: &Shared| {
+        let state = observed.lock().unwrap_or_else(|e| e.into_inner());
+        (state.remote_start_calls, state.closed)
+    };
+    let result: TestResult = async {
+        event(&mut events, |e| {
+            matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Ready))
+        })
+        .await?;
+        // A run longer than the idle time keeps its session.
+        worker.send(Command::Start(continuous()))?;
+        event(&mut events, |e| {
+            matches!(e, WorkerEvent::State(RunState::Clicking))
+        })
+        .await?;
+        sleep(idle * 2).await;
+        ensure(
+            remote(&observed) == (1, 0),
+            "a running session must stay open",
+        )?;
+        worker.send(Command::Stop)?;
+        event(&mut events, |e| {
+            matches!(e, WorkerEvent::State(RunState::Stopped))
+        })
+        .await?;
+        let first_session = observed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remote_session
+            .clone();
+        // A start within the idle time needs no new permission.
+        worker.send(Command::Start(continuous()))?;
+        event(&mut events, |e| {
+            matches!(e, WorkerEvent::State(RunState::Clicking))
+        })
+        .await?;
+        worker.send(Command::Stop)?;
+        event(&mut events, |e| {
+            matches!(e, WorkerEvent::State(RunState::Stopped))
+        })
+        .await?;
+        ensure(
+            remote(&observed) == (1, 0),
+            "a quick restart must reuse the session",
+        )?;
+        timeout(Duration::from_secs(3), async {
+            while remote(&observed).1 == 0 {
+                sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await?;
+        ensure(
+            remote(&observed) == (1, 1),
+            "the idle session must be closed",
+        )?;
+        worker.send(Command::Start(continuous()))?;
+        event(&mut events, |e| {
+            matches!(e, WorkerEvent::State(RunState::Clicking))
+        })
+        .await?;
+        let state = observed.lock().unwrap_or_else(|e| e.into_inner());
+        ensure(
+            state.remote_start_calls == 2 && state.remote_session != first_session,
+            "the next start must request a new session",
+        )
+    }
+    .await;
+    tokio::task::spawn_blocking(move || worker.shutdown()).await?;
+    service.close().await?;
+    result
+}
+
 /// The hotkey stays a reliable Stop: an old key press cannot start a run,
 /// but it still stops one, here a start sent after the Stop that the
 /// worker handles before the queued presses.
