@@ -720,6 +720,36 @@ TestCase {
         compare(y.contentItem.Accessible.name, y.Accessible.name)
     }
 
+    Component {
+        id: otherWindowComponent
+        Window { width: 100; height: 100; visible: true }
+    }
+
+    function test_later_launch_activates_main_window() {
+        const other = createTemporaryObject(otherWindowComponent, null)
+        other.requestActivate()
+        tryCompare(other, "active", true)
+        main.activateFromLauncher()
+        tryCompare(main, "active", true)
+    }
+
+    function test_later_launch_returns_to_open_picker() {
+        controller.current_position = false
+        main.beginPicker(false)
+        const picker = main.positionPicker
+        verify(picker !== null)
+        tryCompare(picker, "inputReady", true)
+        tryCompare(picker, "active", true)
+        const other = createTemporaryObject(otherWindowComponent, null)
+        other.requestActivate()
+        tryCompare(other, "active", true)
+        main.activateFromLauncher()
+        tryCompare(picker, "active", true)
+        verify(!main.active)
+        main.finishPicker()
+        compare(main.positionPicker, null)
+    }
+
     function test_position_selection_opens_without_capture_delay() {
         controller.current_position = false
         main.beginPicker(false)

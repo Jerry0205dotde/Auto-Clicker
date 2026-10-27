@@ -2,11 +2,19 @@ use cxx_qt_lib::{
     QGuiApplication, QMap, QMapPair_QString_QVariant, QQmlApplicationEngine, QQuickStyle, QString,
     QUrl, QVariant,
 };
-use klickmeister::APP_ID;
+use klickmeister::{
+    APP_ID,
+    instance::{self, Claim, InstanceError},
+    qml_runtime,
+};
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
     let smoke_test = std::env::args_os().any(|argument| argument == "--smoke-test");
+    // Read before Qt starts: Qt Wayland consumes the launcher's token.
+    let activation_token = std::env::var("XDG_ACTIVATION_TOKEN")
+        .ok()
+        .filter(|token| !token.is_empty());
     QQuickStyle::set_style(&QString::from("org.kde.desktop"));
 
     let mut app = QGuiApplication::new();
@@ -25,6 +33,29 @@ fn main() -> ExitCode {
         .as_mut()
         .set_organization_name(&QString::from("Klickmeister"));
 
+    // Claim before QML creates the controller and its portal sessions. Declared
+    // after the application, so the guard stops before Qt is destroyed.
+    let _instance = if smoke_test {
+        None
+    } else {
+        match instance::claim(activation_token, qml_runtime::queue_activation) {
+            Ok(Claim::Primary(guard)) => Some(guard),
+            Ok(Claim::Secondary) => {
+                println!("Klickmeister läuft bereits; das vorhandene Fenster wurde angezeigt.");
+                return ExitCode::SUCCESS;
+            }
+            // The portals need the same bus, so no second hotkey session can arise.
+            Err(error @ InstanceError::NoSessionBus(_)) => {
+                eprintln!("{error}");
+                None
+            }
+            Err(error) => {
+                eprintln!("{error}");
+                return ExitCode::FAILURE;
+            }
+        }
+    };
+
     let mut engine = QQmlApplicationEngine::new();
     let mut engine_pin = engine.pin_mut();
     if smoke_test {
@@ -35,7 +66,7 @@ fn main() -> ExitCode {
     engine_pin.as_mut().load(&QUrl::from(
         "qrc:/qt/qml/io/github/jerry0205/klickmeister/qml/Main.qml",
     ));
-    if !klickmeister::qml_runtime::has_root_object(&engine) {
+    if !qml_runtime::has_root_object(&engine) {
         eprintln!(
             "Klickmeister konnte nicht geöffnet werden: Das Anwendungsfenster konnte nicht geladen werden."
         );
@@ -48,6 +79,7 @@ fn main() -> ExitCode {
         );
         return ExitCode::SUCCESS;
     }
+    qml_runtime::set_activation_window(&engine);
 
     if app_pin.exec() == 0 {
         ExitCode::SUCCESS

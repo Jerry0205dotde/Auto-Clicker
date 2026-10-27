@@ -53,6 +53,8 @@ Das Erzeugen eines Releases veröffentlicht die Paketbeschreibungen noch nicht i
 4. Drücke das Tastenkürzel oder wähle **Starten**. Bestätige die Freigabe für die Maussteuerung im KDE-Dialog.
 5. Drücke das Tastenkürzel erneut oder wähle **Stoppen**, um das Klicken zu beenden.
 
+Klickmeister läuft pro Sitzung nur einmal. Ein weiterer Start, etwa durch einen Doppelklick im Anwendungsmenü, öffnet kein zweites Fenster, sondern holt das vorhandene in den Vordergrund. So erreicht jeder Druck auf das Tastenkürzel genau einen Klickmeister.
+
 Als Tastenkürzel wird `Pause` vorgeschlagen. Das aktive Kürzel steht in der Fußleiste; mit **Ändern …** lässt es sich im KDE-Dialog anpassen. Klickmeister startet erst, wenn ein Tastenkürzel für Start und Stopp eingerichtet ist.
 
 ### Start an der Mauszeigerposition
@@ -98,6 +100,10 @@ Eine feste Position gilt nur für ihren ausgewählten Bildschirm, unabhängig vo
 
 Die Einstellungen werden beim Start eines Klicklaufs und beim Schließen gespeichert. Änderungen werden auch übernommen, wenn kein Lauf gestartet wurde. Schlägt das Speichern beim Schließen fehl, kannst du zur Anwendung zurückkehren oder **Ohne Speichern schließen** wählen. Beim Zurückkehren werden die Freigaben erneut angefragt: das Tastenkürzel sofort, die Maussteuerung beim nächsten Start.
 
+### Warum öffnet sich kein zweites Fenster?
+
+Klickmeister läuft pro Sitzung nur einmal. KDE leitet einen Druck auf das Tastenkürzel an jede laufende Instanz weiter; zwei Instanzen würden sich gegenseitig starten und stoppen. Ein weiterer Start zeigt deshalb das vorhandene Fenster an, während einer Positionsauswahl die Auswahl. Wird Klickmeister gerade geschlossen, wartet ein neuer Start bis zu zehn Sekunden auf dessen Ende und öffnet dann ein eigenes Fenster.
+
 ### Funktioniert Klickmeister unter X11?
 
 Klickmeister ist für KDE Plasma unter Wayland ausgelegt. X11 wird nicht unterstützt.
@@ -129,7 +135,7 @@ bash tests/qml-wayland.sh # isolierter KWin mit drei Bildschirmen, benötigt ksc
 KLICKMEISTER_TEST_SCALE=1.5 bash tests/qml-wayland.sh
 ```
 
-Die QML-Tests verwenden den KDE-Control-Stil und einen Controller-Testersatz. Die AT-SPI-Prüfung startet das Hauptfenster ohne Worker und prüft die zugänglichen Namen der Koordinatenfelder und ihrer Texteingaben. Die D-Bus-Tests prüfen den Rust-Worker gegen simulierte Portale. Dazu gehören Klickfolgen, Stopps, verzögerte Tastenkürzel-Signale, Sitzungsende und Fehler beim Loslassen einer Maustaste. Diese Tests erzeugen keine Mausklicks auf dem Desktop.
+Die QML-Tests verwenden den KDE-Control-Stil und einen Controller-Testersatz. Die AT-SPI-Prüfung startet das Hauptfenster ohne Worker und prüft die zugänglichen Namen der Koordinatenfelder und ihrer Texteingaben. Die D-Bus-Tests prüfen den Rust-Worker gegen simulierte Portale. Dazu gehören Klickfolgen, Stopps, verzögerte Tastenkürzel-Signale, Sitzungsende und Fehler beim Loslassen einer Maustaste. Ein weiterer D-Bus-Test startet das gebaute Programm ohne Bildschirm zweimal. Der zweite Start muss das erste Fenster anzeigen und sich beenden, ohne eine weitere Tastenkürzel-Sitzung anzulegen; nach einem Absturz der ersten Instanz muss ein neuer Start wieder möglich sein. Diese Tests erzeugen keine Mausklicks auf dem Desktop.
 
 Tastenkürzel-Signale, die sich während eines Laufs angestaut haben, dürfen diesen noch stoppen, danach aber keinen neuen Lauf starten. Eine neue Betätigung nach dem Stopp startet wie gewohnt.
 
@@ -149,7 +155,7 @@ Führe zuerst `cargo build --locked` und danach `bash scripts/setup-qmlls.sh` au
 
 ### Desktop-Integration
 
-Der Qt-Desktop-Dateiname lautet `io.github.jerry0205.klickmeister` und entspricht der installierten `.desktop`-Datei. Der QML-Smoke-Test prüft diesen Wert. Klickmeister meldet auch seine separaten D-Bus-Verbindungen vor dem ersten Portalaufruf mit dieser ID bei der [Portal-Registry](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.host.portal.Registry.html) an. Damit funktioniert die Zuordnung auch beim direkten Start der Binärdatei. Die `.desktop`-Datei muss im Anwendungsverzeichnis installiert sein; für Entwicklungsprüfungen genügt `~/.local/share/applications/`. Bei älteren Portaldiensten ohne Registry erfolgt die Zuordnung weiterhin über den Startkontext.
+Der Qt-Desktop-Dateiname lautet `io.github.jerry0205.klickmeister` und entspricht der installierten `.desktop`-Datei. Der QML-Smoke-Test prüft diesen Wert. Klickmeister meldet auch seine separaten D-Bus-Verbindungen vor dem ersten Portalaufruf mit dieser ID bei der [Portal-Registry](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.host.portal.Registry.html) an. Damit funktioniert die Zuordnung auch beim direkten Start der Binärdatei. Die `.desktop`-Datei muss im Anwendungsverzeichnis installiert sein; für Entwicklungsprüfungen genügt `~/.local/share/applications/`. Bei älteren Portaldiensten ohne Registry erfolgt die Zuordnung weiterhin über den Startkontext. Unter derselben ID belegt Klickmeister den D-Bus-Namen `io.github.jerry0205.klickmeister` als Sperre gegen eine zweite Instanz und bietet dort `org.freedesktop.Application.Activate` an. Der Bus gibt den Namen mit der Verbindung frei, auch nach einem Absturz.
 
 Details zum Aufbau und zu Sicherheitsentscheidungen stehen in [ARCHITECTURE.md](ARCHITECTURE.md) und [SECURITY_REVIEW.md](SECURITY_REVIEW.md).
 

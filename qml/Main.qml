@@ -66,6 +66,14 @@ Kirigami.ApplicationWindow {
         if (positionPicker) positionPicker.finish(restoreHost)
     }
 
+    // A later launch asks this instance to show itself. During a position
+    // selection, return to the picker instead of covering it.
+    function activateFromLauncher() {
+        const target = positionPicker && positionPicker.visible ? positionPicker : root
+        target.raise()
+        target.requestActivate()
+    }
+
     function beginPicker(preview) {
         if (positionPicker || !selectedMonitor) return
         const picker = positionPickerComponent.createObject(root, { "screen": selectedMonitor })

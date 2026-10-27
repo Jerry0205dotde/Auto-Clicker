@@ -1598,6 +1598,142 @@ async fn fake_portal(observed: &Shared) -> zbus::Result<zbus::Connection> {
         .await
 }
 
+/// The real application, without a display and with its own settings. It is
+/// killed on drop: after the fake portal ends, the private bus would start the
+/// real desktop portal for its calls.
+struct App(std::process::Child, std::path::PathBuf);
+
+impl App {
+    /// Log to a file: a full pipe would block a long-running instance.
+    fn launch(
+        config: &std::path::Path,
+        name: &str,
+        activation_token: Option<&str>,
+    ) -> std::io::Result<Self> {
+        let log = config.join(format!("{name}.log"));
+        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_klickmeister"));
+        command
+            .env("QT_QPA_PLATFORM", "offscreen")
+            .env("XDG_CONFIG_HOME", config)
+            .env_remove("XDG_ACTIVATION_TOKEN")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::fs::File::create(&log)?);
+        if let Some(token) = activation_token {
+            command.env("XDG_ACTIVATION_TOKEN", token);
+        }
+        command.spawn().map(|child| Self(child, log))
+    }
+
+    async fn wait_for_exit(
+        &mut self,
+    ) -> Result<std::process::ExitStatus, Box<dyn std::error::Error>> {
+        timeout(Duration::from_secs(20), async {
+            loop {
+                if let Some(status) = self.0.try_wait()? {
+                    return Ok(status);
+                }
+                sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await?
+    }
+
+    fn stderr(&self) -> String {
+        std::fs::read_to_string(&self.1).unwrap_or_default()
+    }
+
+    /// End the process abruptly, like a crash.
+    fn kill(&mut self) -> std::io::Result<()> {
+        self.0.kill()?;
+        self.0.wait().map(drop)
+    }
+}
+
+impl Drop for App {
+    fn drop(&mut self) {
+        let _ = self.kill();
+    }
+}
+
+async fn hotkey_sessions_reach(observed: &Shared, count: usize, app: &mut App) -> TestResult {
+    // Loading QML in a debug build takes a while on a busy machine.
+    timeout(Duration::from_secs(60), async {
+        loop {
+            if observed
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .hotkey_created
+                >= count
+            {
+                return Ok(());
+            }
+            if let Some(status) = app.0.try_wait()? {
+                return Err(format!("application exited with {status}: {}", app.stderr()).into());
+            }
+            sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await?
+}
+
+#[tokio::test]
+#[ignore = "requires a private D-Bus session via dbus-run-session"]
+async fn a_second_launch_shows_the_first_without_a_second_hotkey_session() -> TestResult {
+    let _serial = BUS_TEST_LOCK.lock().await;
+    let observed = Shared::default();
+    let service = fake_portal(&observed).await?;
+    let config = std::env::temp_dir().join(format!("klickmeister-instance-{}", std::process::id()));
+    std::fs::create_dir_all(&config)?;
+    let result: TestResult = async {
+        let mut first = App::launch(&config, "first", None)?;
+        hotkey_sessions_reach(&observed, 1, &mut first).await?;
+        let registered = observed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .registered_apps
+            .len();
+
+        let mut second = App::launch(&config, "second", Some("launcher-token"))?;
+        let status = second.wait_for_exit().await?;
+        ensure(
+            status.success(),
+            &format!(
+                "second launch must show the first window: {}",
+                second.stderr()
+            ),
+        )?;
+        ensure(
+            first.0.try_wait()?.is_none(),
+            "first instance must keep running",
+        )?;
+        // Give a wrongly started second instance time to reach the portal.
+        sleep(Duration::from_millis(500)).await;
+        {
+            let state = observed.lock().unwrap_or_else(|e| e.into_inner());
+            ensure(
+                state.hotkey_created == 1,
+                "second launch must not create a hotkey session",
+            )?;
+            ensure(
+                state.registered_apps.len() == registered,
+                "second launch must not connect to the portal",
+            )?;
+        }
+
+        // A crash must not leave the instance lock behind.
+        first.kill()?;
+        let mut third = App::launch(&config, "third", None)?;
+        hotkey_sessions_reach(&observed, 2, &mut third).await?;
+        third.kill()?;
+        Ok(())
+    }
+    .await;
+    let _ = std::fs::remove_dir_all(&config);
+    service.close().await?;
+    result
+}
+
 #[tokio::test]
 #[ignore = "requires a private D-Bus session via dbus-run-session"]
 async fn every_owned_portal_connection_registers_the_app_before_creating_sessions() -> TestResult {

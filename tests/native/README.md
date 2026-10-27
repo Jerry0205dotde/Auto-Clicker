@@ -5,7 +5,7 @@ mit genau einem Monitor**. Benötigt werden Python mit PySide6, dbus-python,
 PyGObject/AT-SPI, `qdbus6` und das gebaute Release-Programm.
 Diese Tests steuern den sichtbaren Desktop und bestätigen die eigenen KDE-Dialoge.
 Währenddessen den Desktop nicht anderweitig bedienen und keine andere Klickmeister-
-Instanz starten. Globale Tastenkürzel dürfen nicht parallel umkonfiguriert werden.
+Instanz starten; läuft bereits eine, zeigt der Teststart nur deren Fenster an und endet. Globale Tastenkürzel dürfen nicht parallel umkonfiguriert werden.
 
 ```bash
 cargo build --locked --release
