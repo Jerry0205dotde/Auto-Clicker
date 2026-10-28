@@ -6,7 +6,7 @@ pkgdesc='Auto clicker for KDE Plasma on Wayland'
 arch=('x86_64')
 url='https://github.com/jerry0205/Auto-Clicker'
 license=('MIT')
-depends=('gcc-libs' 'glibc' 'kirigami' 'qqc2-desktop-style' 'qt6-base' 'qt6-declarative' 'qt6-wayland' 'xdg-desktop-portal' 'xdg-desktop-portal-kde')
+depends=('gcc-libs' 'glibc' 'kirigami' 'kwindowsystem' 'qqc2-desktop-style' 'qt6-base' 'qt6-declarative' 'qt6-wayland' 'xdg-desktop-portal' 'xdg-desktop-portal-kde')
 makedepends=('cargo' 'clang' 'lld' 'pkgconf' 'qt6-tools' 'rust')
 options=('!lto')
 # Pinned source for standalone builds; releases use their own source snapshot.

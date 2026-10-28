@@ -14,6 +14,7 @@ pkgbase = klickmeister
 	depends = gcc-libs
 	depends = glibc
 	depends = kirigami
+	depends = kwindowsystem
 	depends = qqc2-desktop-style
 	depends = qt6-base
 	depends = qt6-declarative

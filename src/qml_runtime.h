@@ -8,4 +8,5 @@ struct Activation;
 
 bool klickmeisterQmlEngineHasRootObject(const QQmlApplicationEngine& engine);
 void klickmeisterSetActivationWindow(const QQmlApplicationEngine& engine);
+void klickmeisterExportParentWindow(const QQmlApplicationEngine& engine);
 void klickmeisterQueueActivation(rust::Box<Activation> activation);

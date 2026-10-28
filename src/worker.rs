@@ -40,6 +40,7 @@ use tokio::{
 
 use crate::{
     model::{ClickSettings, ValidationError},
+    parent_window,
     portal::{PortalClickSession, register_connection, watch_portal_owner},
     scheduler::Schedule,
     state::{RunState, StateMachine},
@@ -533,11 +534,12 @@ async fn setup_hotkey(mut cancel: oneshot::Receiver<()>) -> Result<HotkeyRegistr
             let shortcut =
                 NewShortcut::new(HOTKEY_ID, "Automatisches Klicken starten oder stoppen")
                     .preferred_trigger(Some(PREFERRED_TRIGGER));
+            let parent = parent_window::identifier().await;
             let response = portal
                 .bind_shortcuts(
                     owned_session,
                     &[shortcut],
-                    None,
+                    parent.as_ref(),
                     BindShortcutsOptions::default(),
                 )
                 .await
@@ -955,10 +957,11 @@ async fn run_worker(
                             let session = Arc::clone(&state.session);
                             (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Configuring(hotkey_bound)));
                             configure_task = Some(tokio::spawn(async move {
+                                let parent = parent_window::identifier().await;
                                 portal
                                     .configure_shortcuts(
                                         &session,
-                                        None,
+                                        parent.as_ref(),
                                         ConfigureShortcutsOptions::default(),
                                     )
                                     .await

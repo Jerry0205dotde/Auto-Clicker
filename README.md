@@ -115,7 +115,7 @@ Klickmeister ist für KDE Plasma unter Wayland ausgelegt. X11 wird nicht unterst
 Installiere auf Arch Linux die Build- und Laufzeitabhängigkeiten:
 
 ```bash
-sudo pacman -S --needed base-devel git rust cargo clang lld pkgconf qt6-base qt6-declarative qt6-wayland qt6-tools kirigami qqc2-desktop-style xdg-desktop-portal xdg-desktop-portal-kde python
+sudo pacman -S --needed base-devel git rust cargo clang lld pkgconf qt6-base qt6-declarative qt6-wayland qt6-tools kirigami kwindowsystem qqc2-desktop-style xdg-desktop-portal xdg-desktop-portal-kde python
 ```
 
 Cargo-Befehle bauen den aktuellen Checkout einschließlich lokaler Änderungen. Der `PKGBUILD` im Projektstamm verwendet einen festgelegten, mit Prüfsumme gesicherten Quellstand für Version 0.1.3. Mit `makepkg --allsource --nodeps` lässt sich ein Quellpaket einschließlich des Projektarchivs erstellen und in einem anderen Verzeichnis bauen. Cargo-Abhängigkeiten werden beim Paketbau mit `cargo fetch --locked` geladen.

@@ -2,6 +2,7 @@ pub mod config;
 pub mod controller;
 pub mod instance;
 pub mod model;
+pub mod parent_window;
 pub mod portal;
 pub mod qml_runtime;
 pub mod scheduler;
