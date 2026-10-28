@@ -60,7 +60,7 @@ impl AppConfig {
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error(
-        "Der Speicherort für die Einstellungen fehlt. HOME oder XDG_CONFIG_HOME muss gesetzt sein."
+        "Der Speicherort für die Einstellungen fehlt. HOME oder XDG_CONFIG_HOME muss ein absoluter Pfad sein."
     )]
     MissingHome,
     #[error("Einstellungen konnten nicht geladen werden: {0}")]
@@ -74,17 +74,21 @@ pub enum ConfigError {
 }
 
 pub fn config_path() -> Result<PathBuf, ConfigError> {
-    if let Some(base) = env::var_os("XDG_CONFIG_HOME").filter(|value| !value.is_empty()) {
-        return Ok(PathBuf::from(base).join(APP_DIR).join(CONFIG_FILE));
+    config_path_from_env(
+        env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
+        env::var_os("HOME").map(PathBuf::from),
+    )
+}
+
+fn config_path_from_env(
+    xdg_config_home: Option<PathBuf>,
+    home: Option<PathBuf>,
+) -> Result<PathBuf, ConfigError> {
+    if let Some(base) = xdg_config_home.filter(|value| value.is_absolute()) {
+        return Ok(base.join(APP_DIR).join(CONFIG_FILE));
     }
-    env::var_os("HOME")
-        .filter(|value| !value.is_empty())
-        .map(|home| {
-            PathBuf::from(home)
-                .join(".config")
-                .join(APP_DIR)
-                .join(CONFIG_FILE)
-        })
+    home.filter(|value| value.is_absolute())
+        .map(|home| home.join(".config").join(APP_DIR).join(CONFIG_FILE))
         .ok_or(ConfigError::MissingHome)
 }
 
@@ -109,6 +113,21 @@ pub fn save(config: &AppConfig) -> Result<(), ConfigError> {
 }
 
 pub fn save_to(path: &Path, config: &AppConfig) -> Result<(), ConfigError> {
+    let resolved_path = match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_symlink() => Some(fs::canonicalize(path).map_err(|error| {
+            ConfigError::Write(io::Error::new(
+                error.kind(),
+                format!(
+                    "Das Linkziel der Einstellungsdatei {} konnte nicht aufgelöst werden: {error}",
+                    path.display()
+                ),
+            ))
+        })?),
+        Ok(_) => None,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(ConfigError::Write(error)),
+    };
+    let path = resolved_path.as_deref().unwrap_or(path);
     let parent = path.parent().ok_or_else(|| {
         ConfigError::Write(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -176,6 +195,118 @@ mod tests {
         assert!(save_to(&path, &config).is_ok());
         assert_eq!(load_from(&path).ok(), Some(config));
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn config_path_requires_absolute_base_directories() {
+        for (xdg, home, expected) in [
+            (
+                Some("/xdg"),
+                Some("/home/user"),
+                Some("/xdg/klickmeister/config.toml"),
+            ),
+            (
+                Some("relative"),
+                Some("/home/user"),
+                Some("/home/user/.config/klickmeister/config.toml"),
+            ),
+            (
+                Some(""),
+                Some("/home/user"),
+                Some("/home/user/.config/klickmeister/config.toml"),
+            ),
+            (
+                None,
+                Some("/home/user"),
+                Some("/home/user/.config/klickmeister/config.toml"),
+            ),
+            (
+                Some("/xdg"),
+                Some("relative"),
+                Some("/xdg/klickmeister/config.toml"),
+            ),
+            (Some("relative"), Some("relative"), None),
+            (None, Some("relative"), None),
+            (None, None, None),
+        ] {
+            let result = config_path_from_env(xdg.map(PathBuf::from), home.map(PathBuf::from));
+            match expected {
+                Some(path) => {
+                    assert_eq!(result.ok(), Some(PathBuf::from(path)), "{xdg:?}, {home:?}")
+                }
+                None => assert!(
+                    matches!(result, Err(ConfigError::MissingHome)),
+                    "{xdg:?}, {home:?}"
+                ),
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_preserves_symlink_and_atomically_replaces_its_target() {
+        use std::os::unix::fs::symlink;
+
+        for relative in [false, true] {
+            let directory = test_path("symlink");
+            let path = directory.join("config/config.toml");
+            let target = directory.join("dotfiles/settings.toml");
+            let previous = directory.join("previous.toml");
+            assert!(fs::create_dir_all(directory.join("config")).is_ok());
+            assert!(fs::create_dir_all(directory.join("dotfiles")).is_ok());
+            let original = "interval_ms = 100\n";
+            assert!(fs::write(&target, original).is_ok());
+            assert!(fs::hard_link(&target, &previous).is_ok());
+            let link_target = if relative {
+                PathBuf::from("../dotfiles/settings.toml")
+            } else {
+                target.clone()
+            };
+            assert!(symlink(&link_target, &path).is_ok());
+            let config = AppConfig {
+                interval_ms: 250,
+                ..AppConfig::default()
+            };
+
+            let result = save_to(&path, &config);
+            let preserved_link = fs::read_link(&path).ok();
+            let loaded_link = load_from(&path).ok();
+            let loaded_target = load_from(&target).ok();
+            let previous_contents = fs::read_to_string(&previous).ok();
+            assert!(fs::remove_dir_all(directory).is_ok());
+
+            assert!(result.is_ok(), "{result:?}");
+            assert_eq!(preserved_link, Some(link_target));
+            assert_eq!(loaded_link, Some(config.clone()));
+            assert_eq!(loaded_target, Some(config));
+            assert_eq!(previous_contents.as_deref(), Some(original));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_reports_a_broken_symlink_without_replacing_it() {
+        use std::os::unix::fs::symlink;
+
+        let directory = test_path("broken-symlink");
+        assert!(fs::create_dir(&directory).is_ok());
+        let path = directory.join("config.toml");
+        let target = directory.join("missing.toml");
+        assert!(symlink(&target, &path).is_ok());
+
+        let result = save_to(&path, &AppConfig::default());
+        let preserved_link = fs::read_link(&path).ok();
+        let target_exists = target.exists();
+        assert!(fs::remove_dir_all(directory).is_ok());
+
+        assert!(matches!(&result, Err(ConfigError::Write(_))));
+        assert!(
+            result
+                .err()
+                .is_some_and(|error| error.to_string().contains("Linkziel"))
+        );
+        assert_eq!(preserved_link, Some(target));
+        assert!(!target_exists);
     }
 
     #[test]
