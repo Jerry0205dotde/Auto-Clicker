@@ -21,7 +21,10 @@ use tokio::{
     time::{Duration, timeout},
 };
 
-use crate::model::{ClickSettings, MonitorGeometry};
+use crate::{
+    model::{ClickSettings, MonitorGeometry},
+    parent_window,
+};
 
 const EVENT_TIMEOUT: Duration = Duration::from_millis(250);
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
@@ -331,8 +334,9 @@ impl PortalClickSession {
                     .map_err(PortalError::Denied)?;
             }
 
+            let parent = parent_window::identifier().await;
             let selected = portal
-                .start(session, None, Default::default())
+                .start(session, parent.as_ref(), Default::default())
                 .await
                 .map_err(PortalError::Unavailable)?
                 .response()

@@ -11,6 +11,7 @@ use ashpd::zbus::{
 };
 use klickmeister::{
     model::{ClickSettings, ClickType, MonitorGeometry, MouseButton},
+    parent_window,
     state::RunState,
     worker::{Command, HotkeyPhase, StartRequest, WorkerEvent, WorkerHandle},
 };
@@ -40,6 +41,8 @@ struct Observed {
     hotkey_created: usize,
     /// `preferred_trigger` of every BindShortcuts call.
     preferred_triggers: Vec<Option<String>>,
+    /// Method and `parent_window` of every request that can show a dialog.
+    parents: Vec<(&'static str, String)>,
     reject_hotkey: bool,
     empty_hotkey_trigger: bool,
     hotkey_version: Option<u32>,
@@ -288,21 +291,23 @@ impl FakeHotkeys {
         &self,
         _session: OwnedObjectPath,
         shortcuts: Vec<(String, Options)>,
-        _parent: String,
+        parent: String,
         options: Options,
         #[zbus(connection)] connection: &zbus::Connection,
         #[zbus(header)] header: zbus::message::Header<'_>,
     ) -> zbus::fdo::Result<OwnedObjectPath> {
-        self.0
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .preferred_triggers
-            .extend(shortcuts.iter().map(|(_, shortcut)| {
-                shortcut
-                    .get("preferred_trigger")
-                    .and_then(|value| <&str>::try_from(value).ok())
-                    .map(str::to_owned)
-            }));
+        {
+            let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
+            state.parents.push(("BindShortcuts", parent));
+            state
+                .preferred_triggers
+                .extend(shortcuts.iter().map(|(_, shortcut)| {
+                    shortcut
+                        .get("preferred_trigger")
+                        .and_then(|value| <&str>::try_from(value).ok())
+                        .map(str::to_owned)
+                }));
+        }
         let (delay, seen, release) = {
             let state = self.0.lock().unwrap_or_else(|e| e.into_inner());
             (
@@ -382,12 +387,13 @@ impl FakeHotkeys {
     async fn configure_shortcuts(
         &self,
         _session: OwnedObjectPath,
-        _parent: String,
+        parent: String,
         _options: Options,
     ) {
         let (seen, release) = {
             let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
             state.configure_calls += 1;
+            state.parents.push(("ConfigureShortcuts", parent));
             (
                 state.configure_seen.clone(),
                 state.configure_release.clone(),
@@ -443,7 +449,7 @@ impl FakeRemote {
     async fn start(
         &self,
         _session: OwnedObjectPath,
-        _parent: String,
+        parent: String,
         options: Options,
         #[zbus(connection)] connection: &zbus::Connection,
         #[zbus(header)] header: zbus::message::Header<'_>,
@@ -451,6 +457,7 @@ impl FakeRemote {
         let (fixed, multiple, multi_layout, reverse, override_streams, delay, seen, release) = {
             let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
             state.remote_start_calls += 1;
+            state.parents.push(("Start", parent));
             (
                 state.fixed_stream,
                 state.multiple_sources,
@@ -1985,6 +1992,11 @@ async fn a_second_launch_shows_the_first_without_a_second_hotkey_session() -> Te
                 state.registered_apps.len() == registered,
                 "second launch must not connect to the portal",
             )?;
+            // Offscreen there is no Wayland window to export.
+            ensure(
+                state.parents == [("BindShortcuts", String::new())],
+                &format!("the hotkey dialog must have no parent: {:?}", state.parents),
+            )?;
         }
 
         // A crash must not leave the instance lock behind.
@@ -2969,6 +2981,116 @@ async fn idle_mouse_permission_closes_until_the_next_start() -> TestResult {
         )
     }
     .await;
+    tokio::task::spawn_blocking(move || worker.shutdown()).await?;
+    service.close().await?;
+    result
+}
+
+#[derive(Clone, Copy)]
+enum WindowExport {
+    Missing,
+    Ready,
+    /// The handle arrives after the worker has asked for the first dialog.
+    Late,
+}
+
+/// Issue #78: KDE attaches its dialogs to the exported main window.
+#[tokio::test]
+#[ignore = "requires a private D-Bus session via dbus-run-session"]
+async fn portal_dialogs_use_the_exported_window_as_parent() -> TestResult {
+    let _bus_guard = BUS_TEST_LOCK.lock().await;
+    let mut result = Ok(());
+    for export in [
+        WindowExport::Missing,
+        WindowExport::Ready,
+        WindowExport::Late,
+    ] {
+        result = dialog_parents_once(export).await;
+        if result.is_err() {
+            break;
+        }
+    }
+    // Later tests in this process expect no window.
+    parent_window::finish_export("");
+    result
+}
+
+async fn dialog_parents_once(export: WindowExport) -> TestResult {
+    let observed = Shared::default();
+    let service = fake_portal(&observed).await?;
+    let expected = match export {
+        WindowExport::Missing => {
+            parent_window::finish_export("");
+            ""
+        }
+        WindowExport::Ready => {
+            parent_window::finish_export("ready-handle");
+            "wayland:ready-handle"
+        }
+        WindowExport::Late => {
+            parent_window::begin_export();
+            "wayland:late-handle"
+        }
+    };
+    let (tx, mut events) = mpsc::unbounded_channel();
+    let worker = WorkerHandle::spawn(move |event| {
+        let _ = tx.send(event);
+    });
+    let result: TestResult = async {
+        if let WindowExport::Late = export {
+            sleep(Duration::from_millis(300)).await;
+            ensure(
+                observed
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .parents
+                    .is_empty(),
+                "BindShortcuts must wait for a pending export",
+            )?;
+            parent_window::finish_export("late-handle");
+        }
+        event(&mut events, |e| {
+            matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Ready))
+        })
+        .await?;
+        worker.send(Command::Start(continuous()))?;
+        event(&mut events, |e| {
+            matches!(e, WorkerEvent::State(RunState::Clicking))
+        })
+        .await?;
+        worker.send(Command::Stop)?;
+        event(&mut events, |e| {
+            matches!(e, WorkerEvent::State(RunState::Stopped))
+        })
+        .await?;
+        let seen = observed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .configure_seen
+            .clone();
+        worker.send(Command::ConfigureHotkey)?;
+        timeout(Duration::from_secs(3), seen.notified()).await?;
+        let parents = observed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .parents
+            .clone();
+        ensure(
+            parents
+                == [
+                    ("BindShortcuts", expected.to_owned()),
+                    ("Start", expected.to_owned()),
+                    ("ConfigureShortcuts", expected.to_owned()),
+                ],
+            &format!("every dialog must use the parent {expected:?}, got {parents:?}"),
+        )
+    }
+    .await;
+    observed
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .configure_release
+        .notify_one();
     tokio::task::spawn_blocking(move || worker.shutdown()).await?;
     service.close().await?;
     result

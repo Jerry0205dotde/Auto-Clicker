@@ -5,7 +5,7 @@ use cxx_qt_lib::{
 use klickmeister::{
     APP_ID,
     instance::{self, Claim, InstanceError},
-    qml_runtime,
+    parent_window, qml_runtime,
 };
 use std::process::ExitCode;
 
@@ -56,6 +56,11 @@ fn main() -> ExitCode {
         }
     };
 
+    // The worker starts with QML and binds the hotkey right away. Its dialog
+    // waits briefly for the window handle, which needs the loaded window.
+    if !smoke_test {
+        parent_window::begin_export();
+    }
     let mut engine = QQmlApplicationEngine::new();
     let mut engine_pin = engine.pin_mut();
     if smoke_test {
@@ -80,6 +85,7 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
     qml_runtime::set_activation_window(&engine);
+    qml_runtime::export_parent_window(&engine);
 
     if app_pin.exec() == 0 {
         ExitCode::SUCCESS

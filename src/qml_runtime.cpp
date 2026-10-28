@@ -8,6 +8,9 @@
 #include <QtCore/QPointer>
 #include <QtGui/QWindow>
 
+#include <KWaylandExtras>
+#include <KWindowSystem>
+
 #include <memory>
 
 namespace {
@@ -43,6 +46,22 @@ void klickmeisterSetActivationWindow(const QQmlApplicationEngine& engine)
 {
     const auto roots = engine.rootObjects();
     activationWindow = roots.isEmpty() ? nullptr : qobject_cast<QWindow*>(roots.first());
+}
+
+void klickmeisterExportParentWindow(const QQmlApplicationEngine& engine)
+{
+    const auto roots = engine.rootObjects();
+    QWindow* window = roots.isEmpty() ? nullptr : qobject_cast<QWindow*>(roots.first());
+    if (!window || !KWindowSystem::isPlatformWayland()) {
+        klickmeisterFinishParentWindowExport(rust::Str());
+        return;
+    }
+    // KWin answers with an xdg-foreign handle, or an empty one on failure.
+    // If the window goes away first, the dialogs stop waiting after a second.
+    KWaylandExtras::exportToplevel(window).then(window, [](const QString& handle) {
+        const QByteArray utf8 = handle.toUtf8();
+        klickmeisterFinishParentWindowExport(rust::Str(utf8.constData(), size_t(utf8.size())));
+    });
 }
 
 void klickmeisterQueueActivation(rust::Box<Activation> activation)
