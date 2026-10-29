@@ -26,7 +26,7 @@ jobs:
           qt6-base qt6-declarative qt6-tools kirigami kwindowsystem qqc2-desktop-style
           dbus python appstream desktop-file-utils
 
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Identify build tool versions for the cache
         id: build-versions
@@ -35,7 +35,7 @@ jobs:
           echo "key=$(pacman -Q rust clang gcc lld qt6-base qt6-declarative | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
 
       - name: Cache Cargo downloads and build outputs
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -106,7 +106,7 @@ jobs:
             kirigami qqc2-desktop-style kwin libkscreen dbus mesa libcap
           pacman -Q kwin qt6-base qt6-declarative qt6-wayland libkscreen mesa
 
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Allow KWin to start without container capabilities
         run: setcap -r /usr/bin/kwin_wayland
