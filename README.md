@@ -128,6 +128,7 @@ Cargo-Befehle bauen den aktuellen Checkout einschließlich lokaler Änderungen. 
 cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked --all-targets
+cargo deny check advisories bans licenses sources # cargo-deny, Regeln in deny.toml
 dbus-run-session -- cargo test --locked --all-targets -- --ignored
 cargo build --locked --release
 bash tests/qml-smoke.sh target/release/klickmeister
@@ -146,6 +147,8 @@ Echte KDE-Dialoge und die Zeigersteuerung auf physischen Bildschirmen werden zus
 Prüfe den Start-Countdown manuell an einem eigenen Testziel: Vor Ablauf der drei Sekunden darf kein Klick erfolgen. **Start abbrechen** und das Tastenkürzel müssen den Countdown ohne Klick beenden. Wiederhole die Prüfung mit bereits erteilter Freigabe. Starts per Tastenkürzel und mit fester Position müssen ohne Countdown beginnen.
 
 GitHub Actions führt Formatierung, Clippy, Rust- und Portaltests, QML-Tests im KDE-Stil, Python-Tests sowie Desktop- und AppStream-Validierung aus. Danach folgen Release-Build und QML-Smoke-Test. Ein separater Job prüft die QML-Oberfläche unter einem virtuellen KWin mit drei Bildschirmen. Beide Jobs verwenden Arch-Linux-Container und die Cargo-Lockdatei; native Tests mit echten KDE-Dialogen bleiben eine manuelle Prüfung.
+
+Der Workflow „Dependencies“ prüft die Abhängigkeiten mit cargo-deny auf RustSec-Meldungen, Lizenzen und Paketquellen. Er läuft bei Pull Requests und zusätzlich jeden Montag, damit neue Meldungen auch ohne Code-Änderung auffallen. Dependabot schlägt wöchentlich gruppierte Updates für Cargo-Abhängigkeiten und die auf Commit-SHAs festgelegten GitHub Actions vor.
 
 Der virtuelle KWin-Job verwendet einen zusammenhängenden Arch-Archivstand mit KWin 6.7.5, da KWin 6.8 das gerätefreie QPainter-Backend entfernt hat. Ursache, isolierte Reproduktion und Aktualisierung des Archivstands sind unter [tests/virtual-wayland.md](tests/virtual-wayland.md) beschrieben.
 

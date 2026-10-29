@@ -1,0 +1,42 @@
+# cargo-deny checks for known vulnerabilities, unmaintained crates, licenses
+# and dependency sources. Run with: cargo deny check advisories bans licenses sources
+
+[graph]
+targets = ["x86_64-unknown-linux-gnu"]
+all-features = true
+
+[advisories]
+# Fail on vulnerabilities, unmaintained and unsound crates and yanked versions.
+unmaintained = "all"
+unsound = "all"
+yanked = "deny"
+ignore = [
+    # zbus 6 absorbs these crates, but ashpd 0.13 (the newest release) still
+    # depends on zbus 5. Remove these entries once ashpd moves to zbus 6.
+    { id = "RUSTSEC-2026-0370", reason = "zvariant: no ashpd release on zbus 6 yet" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names: no ashpd release on zbus 6 yet" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: no ashpd release on zbus 6 yet" },
+]
+
+[licenses]
+# Permissive licenses compatible with the project's MIT license.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
