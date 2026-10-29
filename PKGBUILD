@@ -1,17 +1,17 @@
 # Maintainer: Klickmeister contributors
 pkgname=klickmeister
-pkgver=0.1.3
+pkgver=0.1.4
 pkgrel=1
 pkgdesc='Auto clicker for KDE Plasma on Wayland'
 arch=('x86_64')
-url='https://github.com/jerry0205/Auto-Clicker'
+url='https://github.com/Jerry0205dotde/Auto-Clicker'
 license=('MIT')
 depends=('gcc-libs' 'glibc' 'kirigami' 'kwindowsystem' 'qqc2-desktop-style' 'qt6-base' 'qt6-declarative' 'qt6-wayland' 'xdg-desktop-portal' 'xdg-desktop-portal-kde')
 makedepends=('cargo' 'clang' 'lld' 'pkgconf' 'qt6-tools' 'rust')
 options=('!lto')
 # Pinned source for standalone builds; releases use their own source snapshot.
 _commit=947a56dfe9b5fcd5938406552267030c181c86e2
-source=("Auto-Clicker-${_commit}.tar.gz::https://github.com/Jerry0205/Auto-Clicker/archive/${_commit}.tar.gz")
+source=("Auto-Clicker-${_commit}.tar.gz::https://github.com/Jerry0205dotde/Auto-Clicker/archive/${_commit}.tar.gz")
 b2sums=('568c6578396336a6d5a5ebe844225478a14054db66df3fc2ffa23816e41a133db8583ea7ce3799dac4508c6d615776fbef3e6504157e24cdf86ab2b489aabf40')
 
 _cargo_jobs() {
