@@ -63,7 +63,7 @@ Alle Startpfade verwenden denselben `StateMachine`. `Starting` und `Clicking` we
 
 Direkt: `ashpd`, `cxx`, `cxx-qt`, `cxx-qt-lib`, `futures-util`, `serde`, `thiserror`, `tokio`, `toml`; Build: `cxx-qt-build`. Die vollständige transitive Liste ist mit `cargo tree --locked` reproduzierbar. Qt/Kirigami, KWindowSystem und xdg-desktop-portal-kde kommen aus den signierten Arch-Repositories.
 
-`cargo tree --locked` wurde für diesen Stand erfolgreich ausgeführt. `cargo-audit` war im Prüfsystem nicht installiert; entsprechend wurde nichts ungefragt installiert. Nach Installation des Arch-Pakets `cargo-audit` ist `cargo audit` der dokumentierte Prüfbefehl.
+`cargo tree --locked` wurde für diesen Stand erfolgreich ausgeführt. Der dokumentierte Prüfbefehl ist `cargo deny check advisories bans licenses sources` mit den Regeln aus `deny.toml`. Der Workflow „Dependencies“ führt ihn bei Pull Requests und wöchentlich aus; Dependabot schlägt Updates für Cargo und GitHub Actions vor.
 
 CXX-Qt erzeugt die notwendige Qt-FFI und enthält intern `unsafe`; der handgeschriebene Scheduler-, Konfigurations- und Portalcode enthält keine `unsafe`-Blöcke. Die beiden `unsafe extern "C++"`-Deklarationen in `controller.rs` und `qml_runtime.rs` sind ausschließlich typisierte CXX-Brücken zu Qt. `build.rs` enthält einen `unsafe`-Block, weil CXX-Qt jeden Zugriff auf seinen internen `cc::Build` so kennzeichnet; er fügt nur die Include-Verzeichnisse von KWindowSystem hinzu. Der kleine C++-Helfer prüft, ob QML ein Hauptfenster geladen hat, und reicht Aktivierungsanfragen weiterer Starts über `QMetaObject::invokeMethod` in den Qt-Thread. Dort setzt er `XDG_ACTIVATION_TOKEN` nur für den Aufruf von `requestActivate()` und entfernt die Variable danach wieder, wie es auch `KDBusService` tut. Außerdem exportiert er das Hauptfenster mit `KWaylandExtras::exportToplevel` und gibt nur den erhaltenen Handle-Text an Rust weiter.
 
@@ -72,7 +72,7 @@ CXX-Qt erzeugt die notwendige Qt-FFI und enthält intern `unsafe`; der handgesch
 - Pointer-Steuerung ist eine wirkungsvolle Berechtigung. Ein Fehler könnte in der aktiven Sitzung auf falsche Oberflächen klicken. Begrenzung, Portalbestätigung, Einzel-Scheduler und mehrere Stopwege reduzieren das Risiko.
 - Eine kompromittierte Portal-/Compositorimplementierung liegt außerhalb der Vertrauensgrenze der Anwendung.
 - Bei fester Position stellt das Portal prinzipiell einen Streamhandle bereit. Klickmeister öffnet ihn nicht; eine spätere Codeänderung an diesem Punkt muss erneut geprüft werden.
-- Abhängigkeiten bilden Supply-Chain-Risiken. `Cargo.lock`, Arch-Paketsignaturen, `cargo audit` und Review von Dependency-Änderungen sind die vorgesehenen Kontrollen.
+- Abhängigkeiten bilden Supply-Chain-Risiken. `Cargo.lock`, Arch-Paketsignaturen, `cargo deny` und Review von Dependency-Änderungen sind die vorgesehenen Kontrollen.
 - Doppelklick erzeugt pro begrenztem Scheduler-Tick zwei Press/Release-Paare. Damit liegt die Zyklusrate bei höchstens 100 CPS, die Button-Ereigniszahl naturgemäß höher. Es gibt weiterhin keine ungebremste Schleife.
 
 ## Review-Checkliste
