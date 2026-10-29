@@ -77,7 +77,12 @@ QtObject {
     function start() {}
     function start_from_button() { button_starts += 1 }
     // Mirrors the worker's later State(Stopped), which also ends a countdown.
-    function stop() { stops += 1; running = false; busy = false; countdown_remaining = 0 }
+    // Lets tests model the worker reporting state after an asynchronous stop.
+    property bool deferStop: false
+    function stop() {
+        stops += 1
+        if (!deferStop) { running = false; busy = false; countdown_remaining = 0 }
+    }
     function configure_hotkey() {}
     function clear_error() { error_message = "" }
 }

@@ -677,20 +677,46 @@ TestCase {
         compare(findChild(main, "monitorStopMessage").visible, false)
     }
 
-    function test_changed_monitor_stops_fixed_position_runs_with_reason() {
+    function test_changed_monitor_stops_fixed_position_runs_with_reason_data() {
+        return [
+            { tag: "running/moved", state: "running", property: "monitor_x" },
+            { tag: "running/resized", state: "running", property: "monitor_width" },
+            { tag: "busy/moved", state: "busy", property: "monitor_y" },
+            { tag: "busy/resized", state: "busy", property: "monitor_height" }
+        ]
+    }
+    function test_changed_monitor_stops_fixed_position_runs_with_reason(data) {
         const message = findChild(main, "monitorStopMessage")
-        for (const state of ["running", "busy"]) {
-            controller.current_position = false
-            controller.fixed_position_confirmed = true
-            controller.monitor_width += 1
-            controller[state] = true
-            main.handleScreensChanged()
-            compare(controller[state], false)
-            tryCompare(message, "visible", true)
-            controller[state] = true
-            tryCompare(message, "visible", false)
-            controller[state] = false
-        }
+        controller.current_position = false
+        controller.fixed_position_confirmed = true
+        controller[data.property] += 1
+        controller[data.state] = true
+        main.handleScreensChanged()
+        compare(controller[data.state], false)
+        compare(message.visible, true)
+        controller[data.state] = true
+        compare(message.visible, false)
+    }
+
+    function test_stop_reason_survives_late_worker_start() {
+        const message = findChild(main, "monitorStopMessage")
+        controller.current_position = false
+        controller.fixed_position_confirmed = true
+        controller.monitor_width += 1
+        controller.deferStop = true
+        controller.busy = true
+        main.handleScreensChanged()
+        compare(controller.stops, 1)
+        compare(message.visible, true)
+        // Worker finished starting just before it received Stop.
+        controller.running = true
+        controller.busy = false
+        compare(message.visible, true)
+        controller.running = false
+        compare(message.visible, true)
+        // A new run hides the old reason again.
+        controller.running = true
+        compare(message.visible, false)
     }
 
     function test_monitor_activation_does_not_confirm_clamped_coordinates() {
