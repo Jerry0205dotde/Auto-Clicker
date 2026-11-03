@@ -28,7 +28,7 @@ def frame(title):
     )
 
 
-def portal_button(title, name, position, count):
+def portal_button(title, names, position, count):
     """German KDE 6.7 fallback for buttons whose AT-SPI names are empty.
 
     The visible labels/order are verified in this version's dialog and native
@@ -42,7 +42,7 @@ def portal_button(title, name, position, count):
         if n.get_role_name() == "button"
         and n.get_state_set().contains(Atspi.StateType.SHOWING)
     ]
-    named = [n for n in buttons if n.get_name() == name]
+    named = [n for n in buttons if n.get_name() in names]
     if len(named) == 1:
         button = named[0]
     else:
@@ -58,7 +58,8 @@ def portal_button(title, name, position, count):
 def grant_remote():
     wait_for(lambda: frame("Fernsteuerung"), timeout=10)
     kwin("focus_portal")
-    portal_button("Fernsteuerung", "Akzeptieren", 0, 2)
+    # Some KDE 6.7 builds name the accept button "OK" instead.
+    portal_button("Fernsteuerung", ("Akzeptieren", "OK"), 0, 2)
 
 
 def open_picker():

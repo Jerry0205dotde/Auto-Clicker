@@ -66,5 +66,55 @@ mit eigenem `KLICKMEISTER_NATIVE_DIR` gestartet werden. Die optionale Variable
 Bildschirmnamen und die zuletzt tatsächlich empfangenen lokalen Koordinaten an.
 Ereignisse enthalten zusätzlich globale Koordinaten.
 
+## Leistungsmessung
+
+`benchmark.py` misst Klickrate, Streuung und Stopplatenz des gebauten Programms
+mit demselben Testziel, Wächter, eigener Konfiguration und den regulären
+KDE-Freigaben wie die Regressionstests:
+
+```bash
+cargo build --locked --release
+python tests/native/benchmark.py                 # 1×/2× bei 100, 20 und 10 ms
+python tests/native/benchmark.py --long          # je 60 s bei 10 ms
+python tests/native/benchmark.py --modes double --intervals 10 --duration 20
+```
+
+Weitere Optionen zeigt `--help`. Fragt KDE beim ersten Start nach dem globalen
+Tastenkürzel, diesen Dialog selbst bestätigen; der Benchmark wartet bis zu 120 s
+auf `Bereit` und bestätigt erst danach die Fernsteuerung für den Eingabetreiber.
+Die Freigabe der App beim ersten Klicklauf bestätigt ein Aufwärmlauf mit drei
+Klicks; er wird getrennt ausgegeben. Danach folgt pro Modus
+und Intervall ein gezählter Lauf, dessen Zyklenzahl die ideale Dauer ergibt
+(`--duration`, Standard 5 s). Anschließend wird je dreimal per Schaltfläche und
+per Tastenkürzel nach 1 s Klicken gestoppt; danach dürfen 1 s lang (`--quiet`)
+keine Ereignisse mehr ankommen.
+
+Jeder Lauf prüft Anzahl, Taste, Koordinaten (80, 400) und vollständige
+Press-/Release-Paare; `MouseButtonDblClick` zählt als Beginn eines Klicks.
+Ausgegeben werden Zyklen/s und einzelne Klicks/s nach
+`(Zyklen - 1) / (letzter - erster Zyklusbeginn)`, Median/P95/P99/Maximum der
+Abstände der Zyklusbeginne (nächster Rang), die Zeit vom Start bis zum ersten
+Ereignis, CPU-Anteil von App, Testziel und Beobachter sowie RSS und Spitzen-RSS
+der App. Dazu kommen Commit, Buildprofil und Änderungszeit des Programms, System,
+CPU, Qt-Versionen von App und Testziel, KWin und Bildschirm.
+
+Messgrenzen: Zeitpunkte sind Empfangszeiten am Testziel (`CLOCK_MONOTONIC`) und
+enthalten Portal, Compositor und Qt-Ereigniszustellung. Die feste Position
+verwendet keinen Start-Countdown; Freigaben fallen nur in den Aufwärmlauf. Die
+Zyklenstatistik beginnt beim ersten empfangenen Ereignis. Während eines Laufs
+liest der Beobachter alle 5 ms nur neue Zeilen des Ereignisprotokolls; Status und
+Start/Stopp-Schaltfläche werden einmal über AT-SPI aufgelöst und danach direkt
+abgefragt. Die CPU-Anteile gelten zwischen dem ersten und letzten beobachteten
+Ereignis, weichen also um bis zu einen Abfrageschritt ab. Der Aufwand von
+AT-SPI-Registry, Compositor und Portal ist nicht enthalten. Stoppwerte zählen ab
+dem Absenden der Anforderung: Aufruf (AT-SPI-Aktion bzw. Tastendruck über das
+Portal), sichtbarer Status `Gestoppt` und letztes danach empfangenes Ereignis.
+
+Alle Zeiten sind Messwerte dieses Geräts und dieser Sitzung, keine
+Abnahmegrenzen; Fehler entstehen nur bei falschen oder fehlenden Ereignissen.
+Der Benchmark läuft deshalb nicht in der CI. Am Ende beendet `run.py` alle
+eigenen Prozesse und entfernt das temporäre Verzeichnis; `--keep-artifacts`
+behält Protokolle und Rohereignisse.
+
 `scenarios.py` enthält Hilfsfunktionen für weitere beaufsichtigte Fälle; es ist
 kein eigenständiger Teststarter.
