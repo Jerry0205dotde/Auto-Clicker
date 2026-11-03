@@ -17,6 +17,8 @@ Window {
     property int hostVisibility: Window.Windowed
     property bool hintAtBottom: false
     readonly property bool adjustable: inputReady && !previewOnly
+    // Depends only on the screen, so pointer movement does not rebuild it.
+    readonly property string screenName: monitors.displayName(screen, Qt.application.screens)
     signal finished()
     signal picked(int x, int y)
 
@@ -183,7 +185,7 @@ Window {
                 ? qsTr("Gespeicherte Position · X: %1 · Y: %2").arg(picker.targetX).arg(picker.targetY)
                 : !picker.inputReady ? qsTr("Positionsauswahl wird geöffnet … · Esc: abbrechen")
                 : qsTr("%1 · X: %2 · Y: %3\nLinksklick: auswählen · Enter: bestätigen\nPfeiltasten: verschieben · Umschalt + Pfeiltasten: 10 Schritte · Esc / Rechtsklick: abbrechen")
-                    .arg(monitors.displayName(picker.screen, Qt.application.screens)).arg(picker.targetX).arg(picker.targetY)
+                    .arg(picker.screenName).arg(picker.targetX).arg(picker.targetY)
         }
     }
 
