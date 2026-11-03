@@ -93,5 +93,34 @@ class GuardTests(unittest.TestCase):
         self.assertIsNone(target.poll())
 
 
+    def test_app_crash_fails_even_if_scenario_passes(self):
+        for code, reason in (
+            ("raise SystemExit(101)", "exit code 101"),
+            # SIGTERM: like SIGSEGV a deadly signal, but without a core dump.
+            ("import os, signal; os.kill(os.getpid(), signal.SIGTERM)", "SIGTERM"),
+        ):
+            with self.subTest(reason=reason):
+                app = self.spawn(code)
+                target = self.spawn("import time; time.sleep(20)")
+                # Like shutdown_after_input_tests: wait for the app PID to vanish.
+                scenario = self.spawn(
+                    "import time\nfrom pathlib import Path\n"
+                    f"while Path('/proc/{app.pid}').exists(): time.sleep(.01)"
+                )
+                with self.assertRaisesRegex(RuntimeError, reason):
+                    supervise(app, target, scenario, 5)
+                self.assertIsNone(target.poll())
+
+    def test_app_clean_exit_keeps_scenario_result(self):
+        app = self.spawn("raise SystemExit(0)")
+        target = self.spawn("import time; time.sleep(20)")
+        scenario = self.spawn(
+            "import time\nfrom pathlib import Path\n"
+            f"while Path('/proc/{app.pid}').exists(): time.sleep(.01)"
+        )
+        self.assertEqual(supervise(app, target, scenario, 5), 0)
+        self.assertEqual(app.returncode, 0)
+        self.assertIsNone(target.poll())
+
 if __name__ == "__main__":
     unittest.main()
