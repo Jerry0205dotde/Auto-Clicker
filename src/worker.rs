@@ -588,21 +588,14 @@ async fn setup_hotkey(mut cancel: oneshot::Receiver<()>) -> Result<HotkeyRegistr
                 .then(|| shortcut.trigger_description().to_owned());
             Ok(actual)
         };
-        let mut actual = while_hotkey_open(&mut closed, binding).await?;
-        // Apply changes that were already received, before Ready allows a start.
-        let mut changes = Box::pin(changes);
-        while let Some(Some(changed)) = changes.next().now_or_never() {
-            actual = bound_trigger(changed.shortcuts());
-        }
-        // A press before Ready never starts a run, as before the early subscription.
-        let mut activations = Box::pin(activations.filter_map(|message| {
+        let actual = while_hotkey_open(&mut closed, binding).await?;
+        let activations = activations.filter_map(|message| {
             let activation = message.body().deserialize::<Activated>().ok();
             future::ready(
                 activation
                     .map(|activation| HotkeySignal::Activated(activation, message.recv_position())),
             )
-        }));
-        while let Some(Some(_)) = activations.next().now_or_never() {}
+        });
         let signals: HotkeySignals = Box::pin(futures_util::stream::select(
             activations,
             changes.map(HotkeySignal::Changed),
@@ -1060,7 +1053,14 @@ async fn run_worker(
                 hotkey_task = None;
                 hotkey_cancel = None;
                 match result {
-                    Ok(Ok(HotkeyRegistration { connection, portal, session, portal_owner, closed, signals, actual })) => {
+                    Ok(Ok(HotkeyRegistration { connection, portal, session, portal_owner, closed, mut signals, mut actual })) => {
+                        // Apply changes received so far right before Ready allows a start.
+                        // A press before Ready never starts a run, as before the early subscription.
+                        while let Some(Some(signal)) = signals.next().now_or_never() {
+                            if let HotkeySignal::Changed(changed) = signal {
+                                actual = bound_trigger(changed.shortcuts());
+                            }
+                        }
                         let events = futures_util::stream::select(signals, futures_util::stream::once(closed));
                         hotkey = Some(HotkeyState {
                             connection,
