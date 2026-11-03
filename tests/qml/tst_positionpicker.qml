@@ -13,6 +13,8 @@ TestCase {
     PositionPicker { id: picker; hostWindow: host }
     SignalSpy { id: finished; target: picker; signalName: "finished" }
     SignalSpy { id: picked; target: picker; signalName: "picked" }
+    SignalSpy { id: screenNameChanged; target: picker; signalName: "screenNameChanged" }
+    MonitorSelection { id: monitors }
 
     function init() {
         picked.clear(); finished.clear()
@@ -142,6 +144,27 @@ TestCase {
         keyClick(Qt.Key_Return)
         compare(picked.count, 1)
         compare(picked.signalArguments[0][1], 25)
+    }
+
+    function findText(item, text) {
+        if (item.text !== undefined && String(item.text).indexOf(text) === 0) return item
+        for (let i = 0; i < item.children.length; ++i) {
+            const found = findText(item.children[i], text)
+            if (found) return found
+        }
+        return null
+    }
+
+    function test_hint_reuses_screen_name_while_pointer_moves() {
+        begin()
+        const name = monitors.displayName(picker.screen, Qt.application.screens)
+        compare(picker.screenName, name)
+        verify(findText(picker.contentItem, name + " · X: 100 · Y: 150") !== null)
+        screenNameChanged.clear()
+        picker.setTarget(120, 160)
+        picker.moveTarget(1, 0)
+        compare(screenNameChanged.count, 0)
+        verify(findText(picker.contentItem, name + " · X: 121 · Y: 160") !== null)
     }
 
     function test_fresh_picker_transfers_focus_and_returns_coordinates_on_each_monitor() {
