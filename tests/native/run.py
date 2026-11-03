@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -42,15 +43,7 @@ def config_text(screen):
     )
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--binary", type=Path, default=Path("target/release/klickmeister")
-    )
-    parser.add_argument("--timeout", type=float, default=120)
-    parser.add_argument("scenario", type=Path)
-    parser.add_argument("args", nargs=argparse.REMAINDER)
-    args = parser.parse_args()
+def run(binary, timeout, scenario_path, scenario_args=(), keep_artifacts=True):
     base = Path(tempfile.mkdtemp(prefix="klickmeister-native-"))
     os.environ["KLICKMEISTER_NATIVE_DIR"] = str(base)
     os.environ["XDG_CONFIG_HOME"] = str(base / "config")
@@ -85,12 +78,12 @@ def main():
         config.parent.mkdir(parents=True)
         config.write_text(config_text(state["screen"]), encoding="utf-8")
         start("driver", [sys.executable, str(Path(__file__).with_name("driver.py"))])
-        app = start("app", [str(args.binary.resolve())])
+        app = start("app", [str(binary.resolve())])
         (base / "pids.json").write_text(
             json.dumps({name: p.pid for name, p in processes.items()})
         )
         scenario = start(
-            "scenario", [sys.executable, str(args.scenario.resolve()), *args.args]
+            "scenario", [sys.executable, str(scenario_path.resolve()), *scenario_args]
         )
         last_check = 0
 
@@ -104,7 +97,7 @@ def main():
                 )
                 last_check = time.monotonic()
 
-        return supervise(app, target, scenario, args.timeout, check_target)
+        return supervise(app, target, scenario, timeout, check_target)
     finally:
         # Never close the sink while either the app or scenario can send input.
         for name in ("scenario", "app", "driver", "target"):
@@ -115,6 +108,21 @@ def main():
         path = base / "scenario.log"
         if path.exists():
             print(path.read_text(), end="")
+        if not keep_artifacts:
+            shutil.rmtree(base, ignore_errors=True)
+            print(f"Removed native artifacts: {base}", flush=True)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--binary", type=Path, default=Path("target/release/klickmeister")
+    )
+    parser.add_argument("--timeout", type=float, default=120)
+    parser.add_argument("scenario", type=Path)
+    parser.add_argument("args", nargs=argparse.REMAINDER)
+    args = parser.parse_args()
+    return run(args.binary, args.timeout, args.scenario, args.args)
 
 
 if __name__ == "__main__":
