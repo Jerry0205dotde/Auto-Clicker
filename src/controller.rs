@@ -4,7 +4,7 @@ use crate::{
     config::{self, AppConfig, ConfigError},
     model::{
         ClickSettings, ClickType, MAX_COORDINATE, MAX_INTERVAL_MS, MAX_REPEAT_COUNT,
-        MIN_INTERVAL_MS, MonitorGeometry, MouseButton, PositionMode, RepeatMode, validate_interval,
+        MonitorGeometry, MouseButton, PositionMode, RepeatMode, validate_interval,
     },
     state::RunState,
     worker::{Command, HotkeyPhase, WorkerEvent, WorkerHandle},
@@ -46,7 +46,6 @@ pub mod qobject {
         #[qproperty(i32, monitor_width)]
         #[qproperty(i32, monitor_height)]
         #[qproperty(bool, selecting_position)]
-        #[qproperty(i32, min_interval_ms, READ, CONSTANT)]
         #[qproperty(i32, max_interval_ms, READ, CONSTANT)]
         #[qproperty(i32, max_repeat_count, READ, CONSTANT)]
         type AppController = super::AppControllerRust;
@@ -68,6 +67,10 @@ pub mod qobject {
 
         #[qinvokable]
         fn clear_error(self: Pin<&mut AppController>);
+
+        /// Shortest interval of a click type index at the maximum click rate.
+        #[qinvokable]
+        fn min_interval_ms_for(self: &AppController, click_type: i32) -> i32;
 
         #[qinvokable]
         fn save_config(self: Pin<&mut AppController>) -> bool;
@@ -120,7 +123,6 @@ pub struct AppControllerRust {
     monitor_height: i32,
     selecting_position: bool,
     // Limits from `model` for the QML inputs.
-    min_interval_ms: i32,
     max_interval_ms: i32,
     max_repeat_count: i32,
     worker: Option<WorkerHandle>,
@@ -141,9 +143,18 @@ const fn qml_limit(value: u64) -> i32 {
     value as i32
 }
 
-const QML_MIN_INTERVAL_MS: i32 = qml_limit(MIN_INTERVAL_MS);
+const QML_MIN_SINGLE_INTERVAL_MS: i32 = qml_limit(ClickType::Single.min_interval_ms());
+const QML_MIN_DOUBLE_INTERVAL_MS: i32 = qml_limit(ClickType::Double.min_interval_ms());
 const QML_MAX_INTERVAL_MS: i32 = qml_limit(MAX_INTERVAL_MS);
 const QML_MAX_REPEAT_COUNT: i32 = qml_limit(MAX_REPEAT_COUNT);
+
+/// An unknown click type index gets the single-click limit; starting rejects it anyway.
+fn qml_min_interval_ms(click_type: i32) -> i32 {
+    match ClickType::try_from(click_type) {
+        Ok(ClickType::Double) => QML_MIN_DOUBLE_INTERVAL_MS,
+        _ => QML_MIN_SINGLE_INTERVAL_MS,
+    }
+}
 
 /// Fixed position that is saved while the displayed position is unconfirmed.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -224,7 +235,6 @@ impl AppControllerRust {
             monitor_width: 0,
             monitor_height: 0,
             selecting_position: false,
-            min_interval_ms: QML_MIN_INTERVAL_MS,
             max_interval_ms: QML_MAX_INTERVAL_MS,
             max_repeat_count: QML_MAX_REPEAT_COUNT,
             worker: None,
@@ -240,9 +250,10 @@ impl AppControllerRust {
 
     /// A draft needs valid values but does not need an approved monitor yet.
     fn config_snapshot(&self) -> Result<AppConfig, String> {
+        let click_type = ClickType::try_from(self.click_type).map_err(|error| error.to_string())?;
         let interval_ms = u64::try_from(self.interval_ms)
             .map_err(|_| "Wähle ein Klickintervall größer als 0 ms.".to_owned())?;
-        validate_interval(interval_ms).map_err(|error| error.to_string())?;
+        validate_interval(interval_ms, click_type).map_err(|error| error.to_string())?;
         let repeat_count = match u64::try_from(self.repeat_count) {
             Ok(count) if (1..=MAX_REPEAT_COUNT).contains(&count) => count,
             _ if self.repeat_until_stopped => 100,
@@ -265,7 +276,6 @@ impl AppControllerRust {
         };
         let mouse_button =
             MouseButton::try_from(self.mouse_button).map_err(|error| error.to_string())?;
-        let click_type = ClickType::try_from(self.click_type).map_err(|error| error.to_string())?;
         Ok(AppConfig {
             interval_ms,
             mouse_button,
@@ -501,6 +511,10 @@ impl qobject::AppController {
         self.as_mut().set_fixed_x(x);
         self.as_mut().set_fixed_y(y);
         true
+    }
+
+    pub fn min_interval_ms_for(&self, click_type: i32) -> i32 {
+        qml_min_interval_ms(click_type)
     }
 
     /// Save a changed draft, including settings that do not require a click run.
@@ -1236,6 +1250,30 @@ mod tests {
         assert_eq!(side.stops(), 3);
         // A failed save keeps the worker and its hotkey session.
         assert!(controller.worker.is_some());
+    }
+
+    #[test]
+    fn interval_minimum_follows_the_click_type() {
+        assert_eq!(qml_min_interval_ms(ClickType::Single.into()), 2);
+        assert_eq!(qml_min_interval_ms(ClickType::Double.into()), 4);
+        assert_eq!(qml_min_interval_ms(2), 2);
+        let mut controller = AppControllerRust::from_config(AppConfig::default(), None);
+        controller.interval_ms = 2;
+        assert_eq!(
+            controller
+                .config_snapshot()
+                .map(|config| config.interval_ms),
+            Ok(2)
+        );
+        controller.click_type = ClickType::Double.into();
+        assert_eq!(
+            controller.config_snapshot(),
+            Err(
+                "Wähle ein Klickintervall von mindestens 4 ms (höchstens 500 Klicks/s).".to_owned()
+            )
+        );
+        controller.interval_ms = 4;
+        assert!(controller.config_snapshot().is_ok());
     }
 
     #[test]

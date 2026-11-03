@@ -13,9 +13,9 @@ Klickmeister übernimmt wiederholte Mausklicks unter KDE Plasma 6 auf Wayland. W
 - Aktuelle Mauszeigerposition oder feste Position auf einem ausgewählten Bildschirm
 - Positionsauswahl direkt auf dem Desktop, mit Feineinstellung per Pfeiltasten
 - Eine festgelegte Anzahl von Klickzyklen oder Klicken bis zum Stopp
-- Klickintervalle von 10 Millisekunden bis 24 Stunden
+- Klickintervalle von 2 Millisekunden (Doppelklick: 4 Millisekunden) bis 24 Stunden
 
-Ein Klickzyklus entspricht einem Einzel- oder Doppelklick. Drei Zyklen erzeugen drei Einzelklicks oder drei Doppelklicks, also sechs einzelne Klicks. Bei 10 ms plant Klickmeister höchstens 100 Zyklen pro Sekunde. Die Oberfläche zeigt die Zyklus- und Klickrate an; bei Intervallen über einer Sekunde zeigt sie den Abstand zwischen den Zyklen.
+Ein Klickzyklus entspricht einem Einzel- oder Doppelklick. Drei Zyklen erzeugen drei Einzelklicks oder drei Doppelklicks, also sechs einzelne Klicks. Klickmeister plant höchstens 500 einzelne Klicks pro Sekunde: bei Einzelklicks 500 Zyklen pro Sekunde (2 ms), bei Doppelklicks 250 Zyklen pro Sekunde (4 ms). Wechselst du zum Doppelklick, hebt Klickmeister ein kürzeres Intervall auf 4 ms an. Wie viele Klicks tatsächlich ankommen, hängt bei so kurzen Intervallen von Portal, Compositor und Rechner ab und kann unter der geplanten Rate liegen. Auf einem Intel Core i5-7200U unter KWin 6.7.5 kamen bei fester Position und geplanten 500 Klicks/s etwa 200 Einzelklicks bzw. 240 Klicks als Doppelklicks pro Sekunde an. Die Oberfläche zeigt die Zyklus- und Klickrate an; bei Intervallen über einer Sekunde zeigt sie den Abstand zwischen den Zyklen.
 
 ## Installation
 

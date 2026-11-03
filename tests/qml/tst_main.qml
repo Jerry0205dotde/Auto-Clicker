@@ -201,11 +201,11 @@ TestCase {
     }
 
     // SpinBox parses unfinished text on focus loss and clamps it to from/to,
-    // which turned an empty interval into the 10 ms maximum rate.
+    // which turned an empty interval into the 2 ms maximum rate.
     function test_start_button_keeps_interval_of_unfinished_input_data() {
         return [
             { tag: "empty", text: "" },
-            { tag: "below minimum", text: "5" }
+            { tag: "below minimum", text: "1" }
         ]
     }
     function test_start_button_keeps_interval_of_unfinished_input(data) {
@@ -252,7 +252,7 @@ TestCase {
         controller.interval_ms = 1000
         const input = findChild(main, "intervalInput")
         const rateLabel = findChild(main, "rateLabel")
-        replaceText(input, "5")
+        replaceText(input, "1")
         const rate = rateLabel.text
         // A hotkey start runs with the last committed value and then
         // disables the form, which takes focus from the unfinished input.
@@ -922,6 +922,8 @@ TestCase {
         const nearOneCycle = Number(1.001).toLocaleString(Qt.locale(), 'f', 3)
         const nearTwoClicks = Number(2.002).toLocaleString(Qt.locale(), 'f', 3)
         const scenarios = [
+            { interval: 2, type: 0, expected: "500 Zyklen/s · 500 Klicks/s" },
+            { interval: 4, type: 1, expected: "250 Zyklen/s · 500 Klicks/s" },
             { interval: 10, type: 0, expected: "100 Zyklen/s · 100 Klicks/s" },
             { interval: 10, type: 1, expected: "100 Zyklen/s · 200 Klicks/s" },
             { interval: 1000, type: 0, expected: "1 Zyklus/s · 1 Klick/s" },
@@ -941,6 +943,32 @@ TestCase {
             compare(statusLabel.text, "Status: Klicken aktiv · " + scenario.expected)
             controller.running = false
         }
+    }
+
+    // 500 single clicks/s: 2 ms for single and 4 ms for double clicks.
+    function test_interval_minimum_follows_click_type() {
+        const input = findChild(main, "intervalInput")
+        controller.interval_ms = 2
+        compare(input.from, 2)
+        compare(input.value, 2)
+        mouseClick(choice("clickTypeInput", "Doppelklick"))
+        compare(controller.click_type, 1)
+        compare(input.from, 4)
+        compare(controller.interval_ms, 4)
+        compare(input.value, 4)
+        compare(controller.configDirty, true)
+        // Single clicks may go faster again, but keep the chosen interval.
+        mouseClick(choice("clickTypeInput", "Einzelklick"))
+        compare(input.from, 2)
+        compare(controller.interval_ms, 4)
+        // Longer intervals are unchanged by switching.
+        controller.interval_ms = 3
+        mouseClick(choice("clickTypeInput", "Doppelklick"))
+        compare(controller.interval_ms, 4)
+        controller.interval_ms = 250
+        mouseClick(choice("clickTypeInput", "Einzelklick"))
+        mouseClick(choice("clickTypeInput", "Doppelklick"))
+        compare(controller.interval_ms, 250)
     }
 
     function test_repeat_count_is_labeled_as_cycles() {

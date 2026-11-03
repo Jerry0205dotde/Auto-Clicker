@@ -8,13 +8,23 @@ import argparse
 import sys
 from pathlib import Path
 
-from benchmark_metrics import cycles_for
+from benchmark_metrics import CLICKS, cycles_for
+
+# Shortest interval the app accepts per mode: 500 single clicks/s.
+MIN_INTERVAL_MS = {"single": 2, "double": 4}
 
 
 def interval_list(text):
     values = [int(part) for part in text.split(",")]
     if any(value <= 0 for value in values):
         raise argparse.ArgumentTypeError("Intervals must be positive")
+    return values
+
+
+def rate_list(text):
+    values = [int(part) for part in text.split(",")]
+    if any(value <= 0 or 1000 % value for value in values):
+        raise argparse.ArgumentTypeError("Rates must divide 1000 into whole ms")
     return values
 
 
@@ -46,6 +56,11 @@ def options(argv=None):
         help="ms, e.g. 100,20,10",
     )
     parser.add_argument(
+        "--rates",
+        type=rate_list,
+        help="planned single clicks/s instead of --intervals, e.g. 100,250,500",
+    )
+    parser.add_argument(
         "--duration",
         type=float,
         default=5,
@@ -73,7 +88,23 @@ def options(argv=None):
     )
     args = parser.parse_args(argv)
     if args.long:
-        args.intervals, args.duration = [10], 60
+        args.intervals, args.duration, args.rates = [10], 60, None
+    if args.rates:
+        # A double click needs twice the interval for the same click rate.
+        args.runs = [
+            (mode, CLICKS[mode] * 1000 // rate)
+            for rate in args.rates
+            for mode in args.modes
+        ]
+        args.stop_interval = 1000 // max(args.rates)
+    else:
+        args.runs = [
+            (mode, interval) for interval in args.intervals for mode in args.modes
+        ]
+        args.stop_interval = min(args.intervals)
+    for mode, interval in args.runs + [("single", args.stop_interval)]:
+        if interval < MIN_INTERVAL_MS[mode]:
+            parser.error(f"{mode} needs at least {MIN_INTERVAL_MS[mode]} ms")
     return args
 
 
@@ -82,8 +113,7 @@ def estimated_timeout(args):
     # configures the UI. The limit only bounds a hung run.
     runs = sum(
         2 * cycles_for(args.duration, interval) * interval / 1000 + 30
-        for interval in args.intervals
-        for _ in args.modes
+        for _, interval in args.runs
     )
     stops = 2 * args.stop_repeats * (args.stop_after + args.quiet + 30)
     return 180 + runs + stops

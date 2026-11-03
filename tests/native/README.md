@@ -77,6 +77,7 @@ cargo build --locked --release
 python tests/native/benchmark.py                 # 1×/2× bei 100, 20 und 10 ms
 python tests/native/benchmark.py --long          # je 60 s bei 10 ms
 python tests/native/benchmark.py --modes double --intervals 10 --duration 20
+python tests/native/benchmark.py --rates 100,250,500   # geplante Klicks/s
 ```
 
 Weitere Optionen zeigt `--help`. Fragt KDE beim ersten Start nach dem globalen
@@ -85,13 +86,17 @@ auf `Bereit` und bestätigt erst danach die Fernsteuerung für den Eingabetreibe
 Die Freigabe der App beim ersten Klicklauf bestätigt ein Aufwärmlauf mit drei
 Klicks; er wird getrennt ausgegeben. Danach folgt pro Modus
 und Intervall ein gezählter Lauf, dessen Zyklenzahl die ideale Dauer ergibt
-(`--duration`, Standard 5 s). Anschließend wird je dreimal per Schaltfläche und
+(`--duration`, Standard 5 s). `--rates` gibt statt der Intervalle geplante
+einzelne Klicks/s vor; Doppelklicks laufen dann mit dem doppelten Intervall, bei
+500 Klicks/s also 2 ms (1×) und 4 ms (2×). Intervalle unter der Grenze der App
+(2 ms bzw. 4 ms) werden abgelehnt. Anschließend wird je dreimal per Schaltfläche und
 per Tastenkürzel nach 1 s Klicken gestoppt; danach dürfen 1 s lang (`--quiet`)
 keine Ereignisse mehr ankommen.
 
 Jeder Lauf prüft Anzahl, Taste, Koordinaten (80, 400) und vollständige
 Press-/Release-Paare; `MouseButtonDblClick` zählt als Beginn eines Klicks.
-Ausgegeben werden Zyklen/s und einzelne Klicks/s nach
+Ausgegeben werden geplante (`Soll`) und erreichte (`Ist`) Zyklen/s und einzelne
+Klicks/s, die erreichten nach
 `(Zyklen - 1) / (letzter - erster Zyklusbeginn)`, Median/P95/P99/Maximum der
 Abstände der Zyklusbeginne (nächster Rang), die Zeit vom Start bis zum ersten
 Ereignis, CPU-Anteil von App, Testziel und Beobachter sowie RSS und Spitzen-RSS
