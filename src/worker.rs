@@ -15,7 +15,7 @@ use ashpd::{
         Session,
         global_shortcuts::{
             Activated, BindShortcutsOptions, ConfigureShortcutsOptions, GlobalShortcuts,
-            NewShortcut, ShortcutsChanged,
+            NewShortcut, Shortcut, ShortcutsChanged,
         },
     },
     zbus::{
@@ -318,7 +318,7 @@ struct HotkeyState {
     connection: ashpd::zbus::Connection,
     portal: Arc<GlobalShortcuts>,
     session: Arc<Session<GlobalShortcuts>>,
-    events: Pin<Box<dyn Stream<Item = HotkeySignal> + Send>>,
+    events: HotkeySignals,
     /// Unique bus name of the portal connection that sends the hotkey signals.
     portal_owner: OwnedUniqueName,
     start_barrier: StartBarrier<Sequence>,
@@ -448,6 +448,8 @@ type Emitter = Arc<dyn Fn(WorkerEvent) + Send + Sync>;
 
 type HotkeyClosedWatcher = Pin<Box<dyn FusedFuture<Output = HotkeySignal> + Send>>;
 
+type HotkeySignals = Pin<Box<dyn Stream<Item = HotkeySignal> + Send>>;
+
 struct HotkeyRegistration {
     connection: ashpd::zbus::Connection,
     portal: GlobalShortcuts,
@@ -455,7 +457,19 @@ struct HotkeyRegistration {
     /// Unique bus name of the portal connection that created the session.
     portal_owner: OwnedUniqueName,
     closed: HotkeyClosedWatcher,
+    /// `Activated` and `ShortcutsChanged`, subscribed before BindShortcuts.
+    signals: HotkeySignals,
     actual: Option<String>,
+}
+
+/// The trigger of the start/stop shortcut, if it still has one.
+fn bound_trigger(shortcuts: &[Shortcut]) -> Option<String> {
+    shortcuts
+        .iter()
+        .find(|shortcut| {
+            shortcut.id() == HOTKEY_ID && !shortcut.trigger_description().trim().is_empty()
+        })
+        .map(|shortcut| shortcut.trigger_description().to_owned())
 }
 
 /// Keep the same revocation subscription through binding and the worker handoff.
@@ -530,6 +544,21 @@ async fn setup_hotkey(mut cancel: oneshot::Receiver<()>) -> Result<HotkeyRegistr
         if !register_hotkey_watcher(ready_rx, &mut closed).await {
             return Err("Die Freigabe für das Tastenkürzel kann nicht überwacht werden. Wähle „Erneut versuchen“.".to_owned());
         }
+        // ashpd adds the match rules only when subscribing. Subscribe before
+        // binding, so no change the portal sends after its response is lost.
+        // Bounded, so a stalled bus cannot delay a later Stop or Shutdown.
+        let (activations, changes) = while_hotkey_open(&mut closed, async {
+            timeout(PORTAL_CLOSE_TIMEOUT, async {
+                // Raw messages keep their receive position for the start barrier.
+                let activations = portal.receive_signal("Activated").await?;
+                let changes = portal.receive_shortcuts_changed().await?;
+                Ok::<_, ashpd::Error>((activations, changes))
+            })
+            .await
+            .map_err(|_| "Zeitüberschreitung beim Einrichten des Tastenkürzels.".to_owned())?
+            .map_err(|error| format!("Das Tastenkürzel kann nicht empfangen werden: {error}"))
+        })
+        .await?;
         let binding = async {
             let shortcut =
                 NewShortcut::new(HOTKEY_ID, "Automatisches Klicken starten oder stoppen")
@@ -560,7 +589,18 @@ async fn setup_hotkey(mut cancel: oneshot::Receiver<()>) -> Result<HotkeyRegistr
             Ok(actual)
         };
         let actual = while_hotkey_open(&mut closed, binding).await?;
-        Ok((portal, portal_owner, actual, closed))
+        let activations = activations.filter_map(|message| {
+            let activation = message.body().deserialize::<Activated>().ok();
+            future::ready(
+                activation
+                    .map(|activation| HotkeySignal::Activated(activation, message.recv_position())),
+            )
+        });
+        let signals: HotkeySignals = Box::pin(futures_util::stream::select(
+            activations,
+            changes.map(HotkeySignal::Changed),
+        ));
+        Ok((portal, portal_owner, actual, closed, signals))
     };
     let result = tokio::select! {
         biased;
@@ -568,11 +608,12 @@ async fn setup_hotkey(mut cancel: oneshot::Receiver<()>) -> Result<HotkeyRegistr
         result = operation => result,
     };
     match result {
-        Ok((portal, portal_owner, actual, closed)) => Ok(HotkeyRegistration {
+        Ok((portal, portal_owner, actual, closed, signals)) => Ok(HotkeyRegistration {
             connection,
             portal,
             portal_owner,
             closed,
+            signals,
             actual,
             session: session
                 .ok_or("Die Freigabe für das Tastenkürzel fehlt. Wähle „Erneut versuchen“.")?,
@@ -1012,58 +1053,34 @@ async fn run_worker(
                 hotkey_task = None;
                 hotkey_cancel = None;
                 match result {
-                    Ok(Ok(HotkeyRegistration { connection, portal, session, portal_owner, mut closed, actual })) => {
-                        // Bounded, so a stalled bus cannot delay a later Stop or Shutdown.
-                        let streams = while_hotkey_open(&mut closed, async {
-                            timeout(PORTAL_CLOSE_TIMEOUT, async {
-                                // Raw messages keep their receive position for the start barrier.
-                                let activations = portal.receive_signal("Activated").await.map_err(|error| error.to_string())?;
-                                let changes = portal.receive_shortcuts_changed().await.map_err(|error| error.to_string())?;
-                                Ok::<_, String>((activations, changes))
-                            })
-                            .await
-                            .unwrap_or_else(|_| Err("Zeitüberschreitung beim Einrichten des Tastenkürzels.".to_owned()))
-                        }).await;
-                        match streams {
-                            Ok((activations, changes)) => {
-                                let activations = activations.filter_map(|message| {
-                                    let activation = message.body().deserialize::<Activated>().ok();
-                                    future::ready(activation.map(|activation| HotkeySignal::Activated(activation, message.recv_position())))
-                                });
-                                let events = futures_util::stream::select(
-                                    futures_util::stream::select(
-                                        activations,
-                                        changes.map(HotkeySignal::Changed),
-                                    ),
-                                    futures_util::stream::once(closed),
-                                );
-                                hotkey = Some(HotkeyState {
-                                    connection,
-                                    portal: Arc::new(portal),
-                                    session,
-                                    events: Box::pin(events),
-                                    portal_owner,
-                                    start_barrier: StartBarrier::new(),
-                                });
-                                if let Some(actual) = actual {
-                                    hotkey_bound = true;
-                                    (emit)(WorkerEvent::Hotkey(actual));
-                                    (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Ready));
-                                    if matches!(machine.state(), RunState::Ready | RunState::Stopped | RunState::Error) {
-                                        (emit)(WorkerEvent::Status("Bereit".to_owned()));
-                                    }
-                                } else {
-                                    hotkey_bound = false;
-                                    (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable));
-                                    (emit)(WorkerEvent::Error("Kein Tastenkürzel für Start und Stopp eingerichtet. Wähle unter „Tastenkürzel“ eine Taste.".to_owned()));
-                                }
+                    Ok(Ok(HotkeyRegistration { connection, portal, session, portal_owner, closed, mut signals, mut actual })) => {
+                        // Apply changes received so far right before Ready allows a start.
+                        // A press before Ready never starts a run, as before the early subscription.
+                        while let Some(Some(signal)) = signals.next().now_or_never() {
+                            if let HotkeySignal::Changed(changed) = signal {
+                                actual = bound_trigger(changed.shortcuts());
                             }
-                            Err(error) => {
-                                let _ = timeout(PORTAL_CLOSE_TIMEOUT, session.close()).await;
-                                let _ = timeout(PORTAL_CLOSE_TIMEOUT, connection.close()).await;
-                                (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable));
-                                (emit)(WorkerEvent::Error(format!("Das Tastenkürzel kann nicht empfangen werden: {error}")));
+                        }
+                        let events = futures_util::stream::select(signals, futures_util::stream::once(closed));
+                        hotkey = Some(HotkeyState {
+                            connection,
+                            portal: Arc::new(portal),
+                            session,
+                            events: Box::pin(events),
+                            portal_owner,
+                            start_barrier: StartBarrier::new(),
+                        });
+                        if let Some(actual) = actual {
+                            hotkey_bound = true;
+                            (emit)(WorkerEvent::Hotkey(actual));
+                            (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Ready));
+                            if matches!(machine.state(), RunState::Ready | RunState::Stopped | RunState::Error) {
+                                (emit)(WorkerEvent::Status("Bereit".to_owned()));
                             }
+                        } else {
+                            hotkey_bound = false;
+                            (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable));
+                            (emit)(WorkerEvent::Error("Kein Tastenkürzel für Start und Stopp eingerichtet. Wähle unter „Tastenkürzel“ eine Taste.".to_owned()));
                         }
                     }
                     Ok(Err(error)) => {
@@ -1127,13 +1144,13 @@ async fn run_worker(
                         }
                     }
                     Some(HotkeySignal::Changed(changed)) => {
-                        if let Some(shortcut) = changed.shortcuts().iter().find(|shortcut| shortcut.id() == HOTKEY_ID && !shortcut.trigger_description().trim().is_empty()) {
+                        if let Some(trigger) = bound_trigger(changed.shortcuts()) {
                             // A reply for the previous shortcut configuration cannot start.
                             if start_request.take().is_some() {
                                 stop_run(&mut machine, &mut active, &mut countdown, &emit);
                             }
                             hotkey_bound = true;
-                            (emit)(WorkerEvent::Hotkey(shortcut.trigger_description().to_owned()));
+                            (emit)(WorkerEvent::Hotkey(trigger));
                             (emit)(WorkerEvent::HotkeyPhase(if configure_task.is_some() { HotkeyPhase::Configuring(true) } else { HotkeyPhase::Ready }));
                             if configure_task.is_none() && !matches!(machine.state(), RunState::Starting | RunState::Clicking) {
                                 (emit)(WorkerEvent::Status("Bereit".to_owned()));
