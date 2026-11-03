@@ -158,8 +158,8 @@ impl Default for AppControllerRust {
                 AppConfig::default(),
                 Some(format!(
                     "{error}\n\nKlickmeister nutzt vorerst Standardwerte. Bevor geänderte \
-                     Einstellungen gespeichert werden, wird die Datei als \
-                     config.toml.invalid gesichert."
+                     Einstellungen gespeichert werden, wird die Datei daneben als \
+                     config.toml.invalid gesichert (bei Bedarf mit angehängter Nummer)."
                 )),
             ),
             Err(error) => (AppConfig::default(), Some(error.to_string())),
@@ -336,9 +336,9 @@ impl AppControllerRust {
         if config != self.initial_config {
             if self.config_unloaded {
                 config::preserve_unloaded(path).map_err(|error| error.to_string())?;
+                self.config_unloaded = false;
             }
             config::save_to(path, &config).map_err(|error| error.to_string())?;
-            self.config_unloaded = false;
         }
         self.saved_position = SavedPosition::from_config(&config);
         self.initial_config = config;
@@ -796,30 +796,57 @@ mod tests {
         let _ = std::fs::remove_dir_all(directory);
     }
 
+    #[cfg(unix)]
     #[test]
-    fn failed_backup_of_an_unloaded_file_blocks_the_write() {
+    fn backup_of_an_unloaded_file_never_writes_through_existing_names() {
         let directory = test_directory();
         let path = directory.join("config.toml");
         assert!(std::fs::create_dir_all(&directory).is_ok());
         let malformed = "interval_ms = [\n";
         assert!(std::fs::write(&path, malformed).is_ok());
-        // A directory in place of the backup makes copying fail.
-        assert!(std::fs::create_dir(directory.join("config.toml.invalid")).is_ok());
+        // An earlier backup that is a hard link to the config, and a link
+        // into a missing directory, must not truncate or skip the original.
+        assert!(std::fs::hard_link(&path, directory.join("config.toml.invalid")).is_ok());
+        assert!(
+            std::os::unix::fs::symlink(
+                directory.join("missing/backup"),
+                directory.join("config.toml.invalid-2")
+            )
+            .is_ok()
+        );
         let mut controller =
             AppControllerRust::from_config(AppConfig::default(), Some("parse error".into()));
+        controller.interval_ms = 300;
+        controller.config_dirty = true;
+        assert!(controller.persist_config_to(&path, false).is_ok());
+        let kept = std::fs::read_to_string(directory.join("config.toml.invalid-3")).ok();
+        let linked = std::fs::read_to_string(directory.join("config.toml.invalid")).ok();
+        let saved = config::load_from(&path).ok().map(|c| c.interval_ms);
+        let _ = std::fs::remove_dir_all(directory);
+        assert_eq!(kept.as_deref(), Some(malformed));
+        assert_eq!(linked.as_deref(), Some(malformed));
+        assert_eq!(saved, Some(300));
+    }
+
+    #[test]
+    fn failed_backup_of_an_unloaded_file_blocks_the_write() {
+        let directory = test_directory();
+        // An unreadable entry in place of the file makes copying it fail.
+        let path = directory.join("config.toml");
+        assert!(std::fs::create_dir_all(&path).is_ok());
+        let mut controller =
+            AppControllerRust::from_config(AppConfig::default(), Some("read error".into()));
         controller.interval_ms = 300;
         controller.config_dirty = true;
         let error = controller
             .persist_config_to(&path, false)
             .err()
             .unwrap_or_default();
-        assert!(error.contains("config.toml.invalid"), "{error}");
-        assert_eq!(
-            std::fs::read_to_string(&path).ok().as_deref(),
-            Some(malformed)
-        );
-        assert!(controller.config_dirty);
+        let still_directory = path.is_dir();
         let _ = std::fs::remove_dir_all(directory);
+        assert!(error.contains("config.toml.invalid"), "{error}");
+        assert!(still_directory);
+        assert!(controller.config_dirty);
     }
 
     #[test]

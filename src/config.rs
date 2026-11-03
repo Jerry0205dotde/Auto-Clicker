@@ -108,23 +108,54 @@ pub fn load_from(path: &Path) -> Result<AppConfig, ConfigError> {
 }
 
 /// Copy a file that could not be loaded next to it as `<name>.invalid`, so that
-/// saving the defaults cannot destroy the user's settings. Returns the path of
-/// the copy, or `None` if there is no file to keep.
+/// saving the defaults cannot destroy the user's settings. An existing backup
+/// or link is never written through; the next free `<name>.invalid-<n>` is
+/// used instead. Returns the path of the copy, or `None` if there is no file.
 pub fn preserve_unloaded(path: &Path) -> Result<Option<PathBuf>, ConfigError> {
-    let mut name = path.file_name().unwrap_or(CONFIG_FILE.as_ref()).to_owned();
-    name.push(".invalid");
-    let backup = path.with_file_name(name);
-    match fs::copy(path, &backup) {
-        Ok(_) => Ok(Some(backup)),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(ConfigError::Write(io::Error::new(
+    let backup_error = |backup: &Path, error: io::Error| {
+        ConfigError::Write(io::Error::new(
             error.kind(),
             format!(
                 "Die nicht geladene Einstellungsdatei konnte nicht nach {} gesichert werden: {error}",
                 backup.display()
             ),
-        ))),
+        ))
+    };
+    let mut name = path.file_name().unwrap_or(CONFIG_FILE.as_ref()).to_owned();
+    name.push(".invalid");
+    let first_backup = path.with_file_name(&name);
+    let mut source = match fs::File::open(path) {
+        Ok(source) => source,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(backup_error(&first_backup, error)),
+    };
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    for attempt in 1..=100 {
+        let backup = if attempt == 1 {
+            first_backup.clone()
+        } else {
+            let mut numbered = name.clone();
+            numbered.push(format!("-{attempt}"));
+            path.with_file_name(numbered)
+        };
+        let mut target = match options.open(&backup) {
+            Ok(target) => target,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(backup_error(&backup, error)),
+        };
+        if let Err(error) = io::copy(&mut source, &mut target).and_then(|_| target.sync_all()) {
+            let _ = fs::remove_file(&backup);
+            return Err(backup_error(&backup, error));
+        }
+        return Ok(Some(backup));
     }
+    Err(backup_error(
+        &first_backup,
+        io::Error::from(io::ErrorKind::AlreadyExists),
+    ))
 }
 
 pub fn save(config: &AppConfig) -> Result<(), ConfigError> {

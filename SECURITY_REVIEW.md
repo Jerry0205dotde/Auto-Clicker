@@ -28,7 +28,7 @@ Keine. Der Produktionscode enthält keine HTTP-, TCP-, UDP- oder DNS-API. D-Bus 
 
 ## 4. Gespeicherte Daten
 
-Nur `config.toml` im XDG-Konfigurationsverzeichnis der Anwendung. Gespeichert werden Intervall, Maustaste, Klicktyp, Wiederholungsmodus/-zahl, Positionsmodus, X/Y, Monitoridentität einschließlich Geometrie/Skalierung und sichtbare Hotkeybeschreibung. Der Austausch erfolgt über eine temporäre Datei im selben Verzeichnis und `rename`. Auf Unix wird die Datei mit Modus 0600 erstellt. Konnte eine vorhandene Datei beim Start nicht gelesen oder geparst werden, wird sie vor dem ersten Speichern geänderter Einstellungen als `config.toml.invalid` daneben kopiert; eine bloße Hotkey-Rückmeldung von KDE löst dann keinen Schreibvorgang aus.
+Nur `config.toml` im XDG-Konfigurationsverzeichnis der Anwendung. Gespeichert werden Intervall, Maustaste, Klicktyp, Wiederholungsmodus/-zahl, Positionsmodus, X/Y, Monitoridentität einschließlich Geometrie/Skalierung und sichtbare Hotkeybeschreibung. Der Austausch erfolgt über eine temporäre Datei im selben Verzeichnis und `rename`. Auf Unix wird die Datei mit Modus 0600 erstellt. Konnte eine vorhandene Datei beim Start nicht gelesen oder geparst werden, wird sie vor dem ersten Speichern geänderter Einstellungen als `config.toml.invalid` (bei Bedarf nummeriert) daneben neu angelegt, ohne bestehende Dateien oder Links zu überschreiben; eine bloße Hotkey-Rückmeldung von KDE löst dann keinen Schreibvorgang aus.
 
 Keine Eingaben, Klickhistorien, Fenstertitel, Prozessinformationen, Clipboard-Inhalte, Kennwörter oder Portal-Restore-Tokens werden gespeichert.
 
