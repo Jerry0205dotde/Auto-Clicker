@@ -89,6 +89,8 @@ struct Observed {
     slow_presses: usize,
     press_delay: Duration,
     press_times: Vec<std::time::Instant>,
+    /// When each slow press reply was sent.
+    slow_press_ends: Vec<std::time::Instant>,
     button_seen: Arc<Notify>,
     button_release: Arc<Notify>,
     version_reads: usize,
@@ -632,7 +634,14 @@ impl FakeRemote {
                 seen.notify_one();
                 release.notified().await;
             }
-            Some(Hold::For(duration)) => sleep(duration).await,
+            Some(Hold::For(duration)) => {
+                sleep(duration).await;
+                self.0
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .slow_press_ends
+                    .push(std::time::Instant::now());
+            }
             None => {}
         }
         Ok(())
@@ -2575,22 +2584,30 @@ async fn overdue_clicks_follow_immediately_without_a_burst() -> TestResult {
             matches!(e, WorkerEvent::State(RunState::Stopped))
         })
         .await?;
-        let (buttons, presses) = {
+        let (buttons, presses, slow_ends) = {
             let state = observed.lock().unwrap_or_else(|e| e.into_inner());
-            (state.buttons.clone(), state.press_times.clone())
+            (
+                state.buttons.clone(),
+                state.press_times.clone(),
+                state.slow_press_ends.clone(),
+            )
         };
         ensure(
             buttons == [(0x110, 1), (0x110, 0)].repeat(6),
             &format!("overdue ticks must keep the exact press/release pairs: {buttons:?}"),
         )?;
-        let gaps: Vec<_> = presses.windows(2).map(|pair| pair[1] - pair[0]).collect();
-        // Waiting another interval after an overrun would take at least 210 ms.
+        // Measured from the slow reply, so a late sleep cannot fail the test.
+        // Waiting another interval after an overrun would idle at least 60 ms.
+        let idle: Vec<_> = slow_ends
+            .iter()
+            .zip(&presses[1..])
+            .map(|(end, next)| next.saturating_duration_since(*end))
+            .collect();
         ensure(
-            gaps[..2]
-                .iter()
-                .all(|gap| *gap >= slow && *gap < slow + interval / 2),
-            &format!("an overdue click must follow the slow one directly: {gaps:?}"),
+            idle.len() == 2 && idle.iter().all(|idle| *idle < interval / 2),
+            &format!("an overdue click must follow the slow one directly: {idle:?}"),
         )?;
+        let gaps: Vec<_> = presses.windows(2).map(|pair| pair[1] - pair[0]).collect();
         // Replaying the missed deadlines would follow the fast click at once.
         ensure(
             gaps[2..].iter().all(|gap| *gap >= interval / 2),
