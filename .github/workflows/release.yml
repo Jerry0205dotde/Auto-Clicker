@@ -23,7 +23,7 @@ jobs:
         run: >-
           pacman -Syu --noconfirm --needed
           git ca-certificates rust cargo clang lld pkgconf
-          qt6-base qt6-declarative qt6-wayland qt6-tools kirigami qqc2-desktop-style
+          qt6-base qt6-declarative qt6-wayland qt6-tools kirigami kwindowsystem qqc2-desktop-style
           xdg-desktop-portal xdg-desktop-portal-kde python
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
