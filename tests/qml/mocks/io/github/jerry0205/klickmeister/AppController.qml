@@ -29,6 +29,10 @@ QtObject {
     property int monitor_width: 0
     property int monitor_height: 0
     property bool selecting_position: false
+    // Mirror the constants from src/model.rs.
+    readonly property int min_interval_ms: 10
+    readonly property int max_interval_ms: 86400000
+    readonly property int max_repeat_count: 10000000
     property bool saveConfigSucceeds: true
     property bool configDirty: false
     property bool positionDirty: false

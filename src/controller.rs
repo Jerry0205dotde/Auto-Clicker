@@ -3,8 +3,8 @@ use std::{path::Path, pin::Pin};
 use crate::{
     config::{self, AppConfig, ConfigError},
     model::{
-        ClickSettings, ClickType, MAX_REPEAT_COUNT, MonitorGeometry, MouseButton, PositionMode,
-        RepeatMode, validate_interval,
+        ClickSettings, ClickType, MAX_COORDINATE, MAX_INTERVAL_MS, MAX_REPEAT_COUNT,
+        MIN_INTERVAL_MS, MonitorGeometry, MouseButton, PositionMode, RepeatMode, validate_interval,
     },
     state::RunState,
     worker::{Command, HotkeyPhase, WorkerEvent, WorkerHandle},
@@ -46,6 +46,9 @@ pub mod qobject {
         #[qproperty(i32, monitor_width)]
         #[qproperty(i32, monitor_height)]
         #[qproperty(bool, selecting_position)]
+        #[qproperty(i32, min_interval_ms, READ, CONSTANT)]
+        #[qproperty(i32, max_interval_ms, READ, CONSTANT)]
+        #[qproperty(i32, max_repeat_count, READ, CONSTANT)]
         type AppController = super::AppControllerRust;
 
         #[qinvokable]
@@ -116,6 +119,10 @@ pub struct AppControllerRust {
     monitor_width: i32,
     monitor_height: i32,
     selecting_position: bool,
+    // Limits from `model` for the QML inputs.
+    min_interval_ms: i32,
+    max_interval_ms: i32,
+    max_repeat_count: i32,
     worker: Option<WorkerHandle>,
     worker_epoch: u64,
     startup_error: Option<String>,
@@ -128,6 +135,16 @@ pub struct AppControllerRust {
     closing: bool,
 }
 
+/// Convert a limit for QML's `int` inputs; an overflow fails the build.
+const fn qml_limit(value: u64) -> i32 {
+    assert!(value <= i32::MAX as u64);
+    value as i32
+}
+
+const QML_MIN_INTERVAL_MS: i32 = qml_limit(MIN_INTERVAL_MS);
+const QML_MAX_INTERVAL_MS: i32 = qml_limit(MAX_INTERVAL_MS);
+const QML_MAX_REPEAT_COUNT: i32 = qml_limit(MAX_REPEAT_COUNT);
+
 /// Fixed position that is saved while the displayed position is unconfirmed.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct SavedPosition {
@@ -138,7 +155,11 @@ struct SavedPosition {
 
 impl SavedPosition {
     fn new(fixed_x: i64, fixed_y: i64, monitor_identity: String) -> Option<Self> {
-        let coordinate = |value| u32::try_from(value).ok().filter(|value| *value <= 100_000);
+        let coordinate = |value| {
+            u32::try_from(value)
+                .ok()
+                .filter(|value| *value <= MAX_COORDINATE)
+        };
         Some(Self {
             fixed_x: coordinate(fixed_x)?,
             fixed_y: coordinate(fixed_y)?,
@@ -189,15 +210,8 @@ impl AppControllerRust {
             busy: false,
             countdown_remaining: 0,
             interval_ms: i64::try_from(config.interval_ms).unwrap_or(100),
-            mouse_button: match config.mouse_button {
-                MouseButton::Left => 0,
-                MouseButton::Right => 1,
-                MouseButton::Middle => 2,
-            },
-            click_type: match config.click_type {
-                ClickType::Single => 0,
-                ClickType::Double => 1,
-            },
+            mouse_button: config.mouse_button.into(),
+            click_type: config.click_type.into(),
             repeat_until_stopped: config.repeat_mode == RepeatMode::UntilStopped,
             repeat_count: i64::try_from(config.repeat_count).unwrap_or(100),
             current_position: config.position_mode == PositionMode::CurrentCursor,
@@ -210,6 +224,9 @@ impl AppControllerRust {
             monitor_width: 0,
             monitor_height: 0,
             selecting_position: false,
+            min_interval_ms: QML_MIN_INTERVAL_MS,
+            max_interval_ms: QML_MAX_INTERVAL_MS,
+            max_repeat_count: QML_MAX_REPEAT_COUNT,
             worker: None,
             worker_epoch: 0,
             config_unloaded: startup_error.is_some(),
@@ -246,17 +263,9 @@ impl AppControllerRust {
         } else {
             return Err("Die Koordinaten sind ungültig. Wähle eine neue Position.".to_owned());
         };
-        let mouse_button = match self.mouse_button {
-            0 => MouseButton::Left,
-            1 => MouseButton::Right,
-            2 => MouseButton::Middle,
-            _ => return Err("Wähle eine gültige Maustaste.".to_owned()),
-        };
-        let click_type = match self.click_type {
-            0 => ClickType::Single,
-            1 => ClickType::Double,
-            _ => return Err("Wähle eine gültige Klickart.".to_owned()),
-        };
+        let mouse_button =
+            MouseButton::try_from(self.mouse_button).map_err(|error| error.to_string())?;
+        let click_type = ClickType::try_from(self.click_type).map_err(|error| error.to_string())?;
         Ok(AppConfig {
             interval_ms,
             mouse_button,
@@ -566,17 +575,10 @@ impl qobject::AppController {
                 "Prüfe Bildschirm und Koordinaten und bestätige die feste Position.".to_owned(),
             );
         }
-        let button = match *self.mouse_button() {
-            0 => MouseButton::Left,
-            1 => MouseButton::Right,
-            2 => MouseButton::Middle,
-            _ => return Err("Wähle eine gültige Maustaste.".to_owned()),
-        };
-        let click_type = match *self.click_type() {
-            0 => ClickType::Single,
-            1 => ClickType::Double,
-            _ => return Err("Wähle eine gültige Klickart.".to_owned()),
-        };
+        let button =
+            MouseButton::try_from(*self.mouse_button()).map_err(|error| error.to_string())?;
+        let click_type =
+            ClickType::try_from(*self.click_type()).map_err(|error| error.to_string())?;
         let interval_ms = u64::try_from(*self.interval_ms())
             .map_err(|_| "Wähle ein Klickintervall größer als 0 ms.".to_owned())?;
         let repeat = if *self.repeat_until_stopped() {

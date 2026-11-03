@@ -541,8 +541,8 @@ Kirigami.ApplicationWindow {
                     objectName: "intervalInput"
                     Layout.fillWidth: true
                     Layout.minimumWidth: 0
-                    from: 10
-                    to: 86400000
+                    from: controller.min_interval_ms
+                    to: controller.max_interval_ms
                     stepSize: 10
                     editable: true
                     valueFromText: (text, locale) => root.parseSpinBoxText(intervalInput, text, locale)
@@ -590,7 +590,7 @@ Kirigami.ApplicationWindow {
                 Layout.fillWidth: true
                 Layout.minimumWidth: 0
                 from: 1
-                to: 10000000
+                to: controller.max_repeat_count
                 editable: true
                 valueFromText: (text, locale) => root.parseSpinBoxText(repeatInput, text, locale)
                 wheelEnabled: false
