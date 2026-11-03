@@ -3440,6 +3440,89 @@ async fn presses_before_run_end_once(by_error: bool) -> TestResult {
     result
 }
 
+/// Issue #95: a Stop after a run that already ended by its count also sets
+/// the barrier. A press sent before that Stop, while the worker was busy,
+/// must not start a new run once the worker reads it.
+#[tokio::test]
+#[ignore = "requires a private D-Bus session via dbus-run-session"]
+async fn key_press_before_stop_after_finished_run_does_not_restart() -> TestResult {
+    let _bus_guard = BUS_TEST_LOCK.lock().await;
+    let observed = Shared::default();
+    let service = fake_portal(&observed).await?;
+    let (tx, mut events) = mpsc::unbounded_channel();
+    let worker = WorkerHandle::spawn(move |event| {
+        let _ = tx.send(event);
+    });
+    let result: TestResult = async {
+        event(&mut events, |e| {
+            matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Ready))
+        })
+        .await?;
+        let session = hotkey_session(&observed)?;
+        let reads = version_reads(&observed);
+        worker.send(Command::Start(ClickSettings {
+            repeat: Some(1),
+            ..continuous()
+        }))?;
+        event(&mut events, |e| {
+            matches!(e, WorkerEvent::State(RunState::Stopped))
+        })
+        .await?;
+        // The barrier of the finished run has settled before the press.
+        wait_for_ordering_reply(&observed, reads).await;
+        // Keep the worker busy closing the revoked click session.
+        observed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .stall_close = true;
+        close_remote_session(&service, &observed).await?;
+        timeout(Duration::from_secs(3), async {
+            while observed
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .close_releases
+                .is_empty()
+            {
+                sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await?;
+        // Press first, then Stop, both while the worker is busy.
+        key_presses(&service, &session, 1, 1).await?;
+        sleep(Duration::from_millis(20)).await;
+        let reads = version_reads(&observed);
+        worker.send(Command::Stop)?;
+        let close_releases = {
+            let mut state = observed.lock().unwrap_or_else(|e| e.into_inner());
+            state.stall_close = false;
+            std::mem::take(&mut state.close_releases)
+        };
+        for close_release in close_releases {
+            close_release.notify_one();
+        }
+        let closed = events_until(&mut events, |e| {
+            matches!(e, WorkerEvent::Status(status) if status.contains("Freigabe erneut erforderlich"))
+        })
+        .await?;
+        sleep(Duration::from_millis(200)).await;
+        let later: Vec<_> = std::iter::from_fn(|| events.try_recv().ok()).collect();
+        ensure(
+            start_requests(&closed) + start_requests(&later) == 0
+                && run_states(&closed).is_empty()
+                && run_states(&later).is_empty(),
+            &format!("a press sent before Stop must not start: {closed:?} {later:?}"),
+        )?;
+        // A press after the Stop's barrier starts again.
+        wait_for_ordering_reply(&observed, reads).await;
+        shortcut_signal(&service, &session, "Activated", 2).await?;
+        start_request(&mut events).await.map(|_| ())
+    }
+    .await;
+    tokio::task::spawn_blocking(move || worker.shutdown()).await?;
+    service.close().await?;
+    result
+}
+
 #[derive(Clone, Copy, Debug)]
 enum GuiCancellation {
     Stop,
