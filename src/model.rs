@@ -6,6 +6,8 @@ pub const MAX_CYCLES_PER_SECOND: u32 = 100;
 pub const MIN_INTERVAL_MS: u64 = 1_000 / MAX_CYCLES_PER_SECOND as u64;
 pub const MAX_INTERVAL_MS: u64 = 86_400_000;
 pub const MAX_REPEAT_COUNT: u64 = 10_000_000;
+/// Largest fixed-position coordinate on either axis.
+pub const MAX_COORDINATE: u32 = 100_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -26,6 +28,30 @@ impl MouseButton {
     }
 }
 
+/// Index of the button in the UI and its controller property.
+impl From<MouseButton> for i32 {
+    fn from(button: MouseButton) -> Self {
+        match button {
+            MouseButton::Left => 0,
+            MouseButton::Right => 1,
+            MouseButton::Middle => 2,
+        }
+    }
+}
+
+impl TryFrom<i32> for MouseButton {
+    type Error = ValidationError;
+
+    fn try_from(index: i32) -> Result<Self, Self::Error> {
+        match index {
+            0 => Ok(Self::Left),
+            1 => Ok(Self::Right),
+            2 => Ok(Self::Middle),
+            _ => Err(ValidationError::InvalidMouseButton),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ClickType {
@@ -39,6 +65,28 @@ impl ClickType {
         match self {
             Self::Single => 1,
             Self::Double => 2,
+        }
+    }
+}
+
+/// Index of the click type in the UI and its controller property.
+impl From<ClickType> for i32 {
+    fn from(click_type: ClickType) -> Self {
+        match click_type {
+            ClickType::Single => 0,
+            ClickType::Double => 1,
+        }
+    }
+}
+
+impl TryFrom<i32> for ClickType {
+    type Error = ValidationError;
+
+    fn try_from(index: i32) -> Result<Self, Self::Error> {
+        match index {
+            0 => Ok(Self::Single),
+            1 => Ok(Self::Double),
+            _ => Err(ValidationError::InvalidClickType),
         }
     }
 }
@@ -93,6 +141,10 @@ pub enum ValidationError {
         "Die feste Position liegt außerhalb des Bildschirms oder kein Bildschirm ist ausgewählt. Prüfe Bildschirm und Koordinaten."
     )]
     InvalidMonitorPosition,
+    #[error("Wähle eine gültige Maustaste.")]
+    InvalidMouseButton,
+    #[error("Wähle eine gültige Klickart.")]
+    InvalidClickType,
 }
 
 impl ClickSettings {
@@ -105,7 +157,7 @@ impl ClickSettings {
             return Err(ValidationError::InvalidRepeat);
         }
         if let Some((x, y)) = self.position {
-            if x > 100_000 || y > 100_000 {
+            if x > MAX_COORDINATE || y > MAX_COORDINATE {
                 return Err(ValidationError::InvalidCoordinates);
             }
             let monitor = self
@@ -209,5 +261,33 @@ mod tests {
         assert_eq!(MouseButton::Left.evdev_code(), 0x110);
         assert_eq!(MouseButton::Right.evdev_code(), 0x111);
         assert_eq!(MouseButton::Middle.evdev_code(), 0x112);
+    }
+
+    #[test]
+    fn maps_ui_indexes_both_ways() {
+        for (index, button) in [
+            (0, MouseButton::Left),
+            (1, MouseButton::Right),
+            (2, MouseButton::Middle),
+        ] {
+            assert_eq!(MouseButton::try_from(index), Ok(button));
+            assert_eq!(i32::from(button), index);
+        }
+        for (index, click_type) in [(0, ClickType::Single), (1, ClickType::Double)] {
+            assert_eq!(ClickType::try_from(index), Ok(click_type));
+            assert_eq!(i32::from(click_type), index);
+        }
+        for index in [-1, 3] {
+            assert_eq!(
+                MouseButton::try_from(index),
+                Err(ValidationError::InvalidMouseButton)
+            );
+        }
+        for index in [-1, 2] {
+            assert_eq!(
+                ClickType::try_from(index),
+                Err(ValidationError::InvalidClickType)
+            );
+        }
     }
 }
