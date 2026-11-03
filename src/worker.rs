@@ -1383,6 +1383,14 @@ impl WorkerHandle {
 }
 
 #[cfg(test)]
+impl WorkerSide {
+    /// Stop requests the "worker" has been sent so far.
+    pub(crate) fn stops(&self) -> u64 {
+        self.control.borrow().stops
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

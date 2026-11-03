@@ -3049,6 +3049,97 @@ async fn key_press_after_stop_starts_again() -> TestResult {
     result
 }
 
+/// Issue #97: a close attempt stops the run before saving and keeps the
+/// worker when saving fails. This follows the controller's protocol: Stop on
+/// `begin_close`, decline every start request while the save error dialog is
+/// open, and Stop again on `cancel_close` ("Zurück zur Anwendung"). No key
+/// press from that time may start a run, also not after returning.
+#[tokio::test]
+#[ignore = "requires a private D-Bus session via dbus-run-session"]
+async fn key_presses_during_a_failed_close_never_start() -> TestResult {
+    retry_if_click_window_missed(key_presses_during_failed_close_once).await
+}
+
+async fn key_presses_during_failed_close_once() -> TestResult {
+    let _bus_guard = BUS_TEST_LOCK.lock().await;
+    let observed = Shared::default();
+    let service = fake_portal(&observed).await?;
+    let (tx, mut events) = mpsc::unbounded_channel();
+    let worker = WorkerHandle::spawn(move |event| {
+        let _ = tx.send(event);
+    });
+    let result: TestResult = async {
+        event(&mut events, |e| {
+            matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Ready))
+        })
+        .await?;
+        let session = hotkey_session(&observed)?;
+        // The held click delays the worker's confirmation of the Stop.
+        let release = hold_first_click(&worker, &observed, &mut events).await?;
+        let reads = version_reads(&observed);
+        worker.send(Command::Stop)?;
+        // A press while the Stop is still outstanding must not restart.
+        shortcut_signal(&service, &session, "Activated", 1).await?;
+        sleep(Duration::from_millis(20)).await;
+        release_held_click(&observed, &release);
+        let stopped = events_until(&mut events, |e| {
+            matches!(
+                e,
+                WorkerEvent::State(RunState::Stopped) | WorkerEvent::Error(_)
+            )
+        })
+        .await?;
+        if let Some(WorkerEvent::Error(error)) = stopped.last() {
+            return Err(error.clone().into());
+        }
+        wait_for_ordering_reply(&observed, reads).await;
+        let clicked = presses(&observed);
+
+        // The save error dialog is open: the controller declines the request.
+        shortcut_signal(&service, &session, "Activated", 2).await?;
+        let declined = start_request(&mut events).await?;
+        let reads = version_reads(&observed);
+        drop(declined);
+        event(&mut events, |e| {
+            matches!(e, WorkerEvent::State(RunState::Stopped))
+        })
+        .await?;
+        wait_for_ordering_reply(&observed, reads).await;
+
+        // A request still queued on Qt when the user returns to the
+        // application is answered only after the Stop of `cancel_close`.
+        shortcut_signal(&service, &session, "Activated", 3).await?;
+        let late = start_request(&mut events).await?;
+        let reads = version_reads(&observed);
+        worker.send(Command::Stop)?;
+        late.start(continuous());
+        sleep(Duration::from_millis(200)).await;
+        let later: Vec<_> = std::iter::from_fn(|| events.try_recv().ok()).collect();
+        ensure(
+            !run_states(&later).contains(&RunState::Clicking) && start_requests(&later) == 0,
+            &format!("a start from the close attempt must not run: {later:?}"),
+        )?;
+        ensure(
+            presses(&observed) == clicked,
+            "no click may follow the close attempt",
+        )?;
+
+        wait_for_ordering_reply(&observed, reads).await;
+
+        // After returning, a new press starts as usual.
+        shortcut_signal(&service, &session, "Activated", 4).await?;
+        start_request(&mut events).await?.start(continuous());
+        event(&mut events, |e| {
+            matches!(e, WorkerEvent::State(RunState::Clicking))
+        })
+        .await
+    }
+    .await;
+    tokio::task::spawn_blocking(move || worker.shutdown()).await?;
+    service.close().await?;
+    result
+}
+
 /// An unused mouse permission ends after the idle time, so KDE's remote
 /// control indicator does not stay up between runs. A start within that time
 /// reuses the session, a later one asks for a new one.

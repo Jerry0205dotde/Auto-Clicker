@@ -38,6 +38,9 @@ QtObject {
     property int saveCount: 0
     property int shutdownCount: 0
     property int initializeCount: 0
+    property int cancelCloseCount: 0
+    // Mirrors the controller's start lock during a close attempt.
+    property bool closing: false
     function initialize() {
         initializeCount++
         hotkey_ready = false
@@ -52,6 +55,16 @@ QtObject {
         hotkey_ready = false
         hotkey_pending = false
         hotkey_configuring = false
+    }
+    function begin_close() {
+        closing = true
+        stop()
+    }
+    function cancel_close() {
+        if (!closing) return
+        closing = false
+        cancelCloseCount++
+        stop()
     }
     function mark_settings_changed() { configDirty = true }
     function mark_position_changed() {
@@ -75,7 +88,7 @@ QtObject {
         return saveConfigSucceeds
     }
     function start() {}
-    function start_from_button() { button_starts += 1 }
+    function start_from_button() { if (!closing) button_starts += 1 }
     // Mirrors the worker's later State(Stopped), which also ends a countdown.
     // Lets tests model the worker reporting state after an asynchronous stop.
     property bool deferStop: false
