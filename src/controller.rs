@@ -1,7 +1,7 @@
 use std::{path::Path, pin::Pin};
 
 use crate::{
-    config::{self, AppConfig},
+    config::{self, AppConfig, ConfigError},
     model::{
         ClickSettings, ClickType, MAX_REPEAT_COUNT, MonitorGeometry, MouseButton, PositionMode,
         RepeatMode, validate_interval,
@@ -116,6 +116,8 @@ pub struct AppControllerRust {
     initial_config: AppConfig,
     saved_position: SavedPosition,
     config_dirty: bool,
+    /// The file on disk was not loaded and must be kept before it is replaced.
+    config_unloaded: bool,
 }
 
 /// Fixed position that is saved while the displayed position is unconfirmed.
@@ -152,6 +154,14 @@ impl Default for AppControllerRust {
     fn default() -> Self {
         let (config, startup_error) = match config::load() {
             Ok(config) => (config, None),
+            Err(error @ (ConfigError::Read(_) | ConfigError::Parse(_))) => (
+                AppConfig::default(),
+                Some(format!(
+                    "{error}\n\nKlickmeister nutzt vorerst Standardwerte. Bevor geänderte \
+                     Einstellungen gespeichert werden, wird die Datei als \
+                     config.toml.invalid gesichert."
+                )),
+            ),
             Err(error) => (AppConfig::default(), Some(error.to_string())),
         };
         Self::from_config(config, startup_error)
@@ -194,6 +204,7 @@ impl AppControllerRust {
             selecting_position: false,
             worker: None,
             worker_epoch: 0,
+            config_unloaded: startup_error.is_some(),
             startup_error,
             saved_position: SavedPosition::from_config(&config),
             initial_config: config,
@@ -288,7 +299,8 @@ impl AppControllerRust {
 
     /// Pass on only events of the current worker. Late events of a shut-down
     /// worker, including its final State(Closing), are dropped. A changed
-    /// hotkey description is a setting that must be saved on close.
+    /// hotkey description is a setting that must be saved on close, unless
+    /// the file on disk was not loaded and only a user edit may replace it.
     fn accept_worker_event(
         &mut self,
         worker_epoch: u64,
@@ -301,7 +313,9 @@ impl AppControllerRust {
             if self.hotkey.to_string() == *hotkey {
                 return None;
             }
-            self.config_dirty = true;
+            if !self.config_unloaded {
+                self.config_dirty = true;
+            }
         }
         Some(event)
     }
@@ -320,7 +334,11 @@ impl AppControllerRust {
         }
         let config = self.config_snapshot()?;
         if config != self.initial_config {
+            if self.config_unloaded {
+                config::preserve_unloaded(path).map_err(|error| error.to_string())?;
+            }
             config::save_to(path, &config).map_err(|error| error.to_string())?;
+            self.config_unloaded = false;
         }
         self.saved_position = SavedPosition::from_config(&config);
         self.initial_config = config;
@@ -723,6 +741,84 @@ mod tests {
             std::fs::read_to_string(&path).ok().as_deref(),
             Some(malformed)
         );
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn unloaded_file_survives_hotkey_report_and_is_kept_before_an_edit_is_saved() {
+        let directory = test_directory();
+        let path = directory.join("config.toml");
+        let backup = directory.join("config.toml.invalid");
+        assert!(std::fs::create_dir_all(&directory).is_ok());
+        let unknown_field = "interval_ms = 250\nfuture_option = true\n";
+        assert!(std::fs::write(&path, unknown_field).is_ok());
+        let load_error = config::load_from(&path)
+            .err()
+            .map(|error| error.to_string());
+        assert!(load_error.is_some());
+        let mut controller = AppControllerRust::from_config(AppConfig::default(), load_error);
+        let epoch = controller.next_worker_epoch();
+
+        // KDE reports the trigger it kept from an earlier session.
+        let Some(WorkerEvent::Hotkey(hotkey)) =
+            controller.accept_worker_event(epoch, WorkerEvent::Hotkey("F8".into()))
+        else {
+            panic!("a changed hotkey must reach the UI");
+        };
+        controller.hotkey = QString::from(&hotkey);
+        // As save_config() on close.
+        assert!(controller.persist_config_to(&path, false).is_ok());
+        assert_eq!(
+            std::fs::read_to_string(&path).ok().as_deref(),
+            Some(unknown_field)
+        );
+        assert!(!backup.exists());
+
+        // A deliberate edit is saved, but the unloaded file is kept first.
+        controller.interval_ms = 300;
+        controller.config_dirty = true;
+        assert!(controller.persist_config_to(&path, false).is_ok());
+        assert_eq!(
+            std::fs::read_to_string(&backup).ok().as_deref(),
+            Some(unknown_field)
+        );
+        let saved = config::load_from(&path).unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!((saved.interval_ms, saved.hotkey.as_str()), (300, "F8"));
+
+        // Later saves replace the file normally and keep the first backup.
+        controller.interval_ms = 400;
+        controller.config_dirty = true;
+        assert!(controller.persist_config_to(&path, false).is_ok());
+        assert_eq!(
+            std::fs::read_to_string(&backup).ok().as_deref(),
+            Some(unknown_field)
+        );
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn failed_backup_of_an_unloaded_file_blocks_the_write() {
+        let directory = test_directory();
+        let path = directory.join("config.toml");
+        assert!(std::fs::create_dir_all(&directory).is_ok());
+        let malformed = "interval_ms = [\n";
+        assert!(std::fs::write(&path, malformed).is_ok());
+        // A directory in place of the backup makes copying fail.
+        assert!(std::fs::create_dir(directory.join("config.toml.invalid")).is_ok());
+        let mut controller =
+            AppControllerRust::from_config(AppConfig::default(), Some("parse error".into()));
+        controller.interval_ms = 300;
+        controller.config_dirty = true;
+        let error = controller
+            .persist_config_to(&path, false)
+            .err()
+            .unwrap_or_default();
+        assert!(error.contains("config.toml.invalid"), "{error}");
+        assert_eq!(
+            std::fs::read_to_string(&path).ok().as_deref(),
+            Some(malformed)
+        );
+        assert!(controller.config_dirty);
         let _ = std::fs::remove_dir_all(directory);
     }
 

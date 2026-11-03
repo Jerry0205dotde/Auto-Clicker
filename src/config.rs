@@ -107,6 +107,26 @@ pub fn load_from(path: &Path) -> Result<AppConfig, ConfigError> {
     }
 }
 
+/// Copy a file that could not be loaded next to it as `<name>.invalid`, so that
+/// saving the defaults cannot destroy the user's settings. Returns the path of
+/// the copy, or `None` if there is no file to keep.
+pub fn preserve_unloaded(path: &Path) -> Result<Option<PathBuf>, ConfigError> {
+    let mut name = path.file_name().unwrap_or(CONFIG_FILE.as_ref()).to_owned();
+    name.push(".invalid");
+    let backup = path.with_file_name(name);
+    match fs::copy(path, &backup) {
+        Ok(_) => Ok(Some(backup)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(ConfigError::Write(io::Error::new(
+            error.kind(),
+            format!(
+                "Die nicht geladene Einstellungsdatei konnte nicht nach {} gesichert werden: {error}",
+                backup.display()
+            ),
+        ))),
+    }
+}
+
 pub fn save(config: &AppConfig) -> Result<(), ConfigError> {
     let path = config_path()?;
     save_to(&path, config)
