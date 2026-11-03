@@ -16,6 +16,15 @@ def terminate(process):
     process.wait(timeout=5)
 
 
+def describe(returncode):
+    if returncode < 0:
+        try:
+            return f"signal {signal.Signals(-returncode).name}"
+        except ValueError:  # Realtime signals have no enum member.
+            return f"signal {-returncode}"
+    return f"exit code {returncode}"
+
+
 def supervise(app, target, scenario, timeout, check_target=lambda: None):
     """Target loss must stop the app without relying on focus, AT-SPI or D-Bus."""
     descriptors = []
@@ -27,7 +36,11 @@ def supervise(app, target, scenario, timeout, check_target=lambda: None):
                 selector.register(fd, selectors.EVENT_READ)
             deadline = time.monotonic() + timeout
             while True:
-                app.poll()  # Reap a normally closed app while the scenario verifies cleanup.
+                # Reap a closed app while the scenario verifies cleanup. The
+                # scenario only sees the PID vanish; a crash must fail the run.
+                code = app.poll()
+                if code:
+                    raise RuntimeError(f"App exited abnormally: {describe(code)}")
                 if target.poll() is not None:
                     raise RuntimeError(
                         "Click target exited: test invalid; stopping app"

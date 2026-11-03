@@ -45,6 +45,8 @@ Die aus den temporären Hilfsskripten übernommenen Korrekturen sind fest enthal
 - Wächtertests verwenden einen schreibenden Ersatzprozess, um einen laufenden
   Erzeuger ohne reale Klicks kontrolliert ausfallen zu lassen. Danach dürfen keine
   Ereignisse hinzukommen. Abbruch, App-Ende und Zielende sind getrennt abgesichert.
+- Endet die App mit Fehlercode oder durch ein Signal, etwa bei einem Absturz beim
+  Schließen, schlägt der Lauf fehl, auch wenn das Szenario bestanden meldet.
 
 Ein zusätzlicher nativer Ausfalltest beendet das echte Testziel **bei ruhendem
 Klicker**. Der folgende Aufruf muss mit Fehlerstatus und `Click target exited`
