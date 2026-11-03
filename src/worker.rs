@@ -807,17 +807,21 @@ async fn run_worker(
     ));
     (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Registering));
     let mut ended_runs = machine.ended_runs();
+    let mut barrier_stops = control.borrow().stops;
 
     loop {
         if machine.state() != RunState::Starting {
             // Closing this receiver revokes even a reply already queued on Qt.
             start_request = None;
         }
-        // A run ended, by Stop, key press, error or its last click. Key
-        // presses the portal has sent up to now may still be queued behind
-        // the busy worker. Ask for a new boundary before reading the next one.
-        if machine.ended_runs() != ended_runs {
+        // A run ended, by Stop, key press, error or its last click, or a
+        // Stop arrived without a run. Key presses the portal has sent up to
+        // now may still be queued behind the busy worker. Ask for a new
+        // boundary before reading the next one.
+        let stops = control.borrow().stops;
+        if machine.ended_runs() != ended_runs || stops != barrier_stops {
             ended_runs = machine.ended_runs();
+            barrier_stops = stops;
             if let Some(state) = hotkey.as_mut() {
                 let portal = zbus::Proxy::clone(&state.portal);
                 let owner = state.portal_owner.clone();
