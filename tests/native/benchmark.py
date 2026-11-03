@@ -12,6 +12,8 @@ from benchmark_metrics import CLICKS, cycles_for
 
 # Shortest interval the app accepts per mode: 500 single clicks/s.
 MIN_INTERVAL_MS = {"single": 2, "double": 4}
+# How much longer than planned a counted run may take before it counts as hung.
+SLOW_RUN_FACTOR = 4
 
 
 def interval_list(text):
@@ -109,10 +111,10 @@ def options(argv=None):
 
 
 def estimated_timeout(args):
-    # Generous: a slow run may take twice its ideal time, and every run first
-    # configures the UI. The limit only bounds a hung run.
+    # Generous: at 500 clicks/s the portal reaches less than half the planned
+    # rate, and every run first configures the UI. It only bounds a hung run.
     runs = sum(
-        2 * cycles_for(args.duration, interval) * interval / 1000 + 30
+        SLOW_RUN_FACTOR * cycles_for(args.duration, interval) * interval / 1000 + 30
         for _, interval in args.runs
     )
     stops = 2 * args.stop_repeats * (args.stop_after + args.quiet + 30)

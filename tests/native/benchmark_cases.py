@@ -13,7 +13,7 @@ import tomllib
 from pathlib import Path
 
 from access import Atspi, action, find, nodes
-from benchmark import options
+from benchmark import SLOW_RUN_FACTOR, options
 from benchmark_metrics import CLICKS, analyze, check_events, cycles_for
 from control import BASE, mark, rpc, wait_for
 from portal_cases import PORTAL_APP, frame, grant_remote
@@ -236,7 +236,8 @@ def counted_run(gui, mode, interval, cycles, quiet):
     assert poll_until(tail.poll, 10), "Run did not start"
     first = Usage()
     assert poll_until(
-        lambda: len(tail.poll()) >= expected, 2 * cycles * interval / 1000 + 10
+        lambda: len(tail.poll()) >= expected,
+        SLOW_RUN_FACTOR * cycles * interval / 1000 + 10,
     ), (len(tail.events), expected)
     last = Usage()
     wait_for(lambda: "Gestoppt" in gui.text())
