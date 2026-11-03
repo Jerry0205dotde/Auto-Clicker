@@ -283,18 +283,22 @@ Kirigami.ApplicationWindow {
         function onVirtualXChanged() { root.handleMonitorGeometryChanged(false) }
         function onVirtualYChanged() { root.handleMonitorGeometryChanged(false) }
     }
+    // Stop and block starts before saving; only a completed save or an explicit
+    // discard ends the worker, so a failed save keeps the hotkey session.
     onClosing: function(close) {
         root.finishPicker(false)
-        controller.shutdown()
+        controller.begin_close()
         if (!root.discardSettingsOnClose && !controller.save_config()) {
             close.accepted = false
             if (root.visibility === Window.Minimized || root.visibility === Window.Hidden)
                 root.showNormal()
             root.raise()
             root.requestActivate()
+            saveFailureDialog.message = controller.error_message
             saveFailureDialog.open()
             return
         }
+        controller.shutdown()
         close.accepted = true
     }
 
@@ -307,21 +311,17 @@ Kirigami.ApplicationWindow {
         width: Math.min(root.width - 32, 440)
         x: (root.width - width) / 2
         y: (root.height - height) / 2
+        // The save error; later worker errors must not replace it while open.
+        property string message
         // The header's close button rejects the dialog; treat it as continuing.
-        onRejected: controller.initialize()
+        onRejected: controller.cancel_close()
 
         ColumnLayout {
             width: saveFailureDialog.availableWidth
             Controls.Label {
                 Layout.fillWidth: true
-                text: controller.error_message
+                text: saveFailureDialog.message
                 wrapMode: Text.WordWrap
-            }
-            Controls.Label {
-                Layout.fillWidth: true
-                text: qsTr("Beim Fortsetzen fragt KDE erneut nach der Freigabe für das Tastenkürzel. Die Freigabe für die Maussteuerung folgt beim nächsten Start.")
-                wrapMode: Text.WordWrap
-                color: Kirigami.Theme.disabledTextColor
             }
             ColumnLayout {
                 Layout.fillWidth: true
@@ -331,7 +331,7 @@ Kirigami.ApplicationWindow {
                     text: qsTr("Zurück zur Anwendung")
                     onClicked: {
                         saveFailureDialog.close()
-                        controller.initialize()
+                        controller.cancel_close()
                     }
                 }
                 Controls.Button {

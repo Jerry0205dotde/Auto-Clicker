@@ -79,6 +79,12 @@ pub mod qobject {
         fn restore_saved_position(self: Pin<&mut AppController>) -> bool;
 
         #[qinvokable]
+        fn begin_close(self: Pin<&mut AppController>);
+
+        #[qinvokable]
+        fn cancel_close(self: Pin<&mut AppController>);
+
+        #[qinvokable]
         fn shutdown(self: Pin<&mut AppController>);
     }
 
@@ -118,6 +124,8 @@ pub struct AppControllerRust {
     config_dirty: bool,
     /// The file on disk was not loaded and must be kept before it is replaced.
     config_unloaded: bool,
+    /// A close attempt is in progress, including its save error dialog.
+    closing: bool,
 }
 
 /// Fixed position that is saved while the displayed position is unconfirmed.
@@ -209,6 +217,7 @@ impl AppControllerRust {
             saved_position: SavedPosition::from_config(&config),
             initial_config: config,
             config_dirty: false,
+            closing: false,
         }
     }
 
@@ -320,6 +329,32 @@ impl AppControllerRust {
         Some(event)
     }
 
+    /// Block starts for the whole close attempt and stop a run or pending start.
+    fn begin_close(&mut self) {
+        self.closing = true;
+        self.send_stop();
+    }
+
+    /// Allow starts again. The second Stop outdates every start requested
+    /// while closing, so none of them is carried out afterwards.
+    fn cancel_close(&mut self) {
+        if std::mem::take(&mut self.closing) {
+            self.send_stop();
+        }
+    }
+
+    /// Neither the picker nor a close attempt may be overtaken by a run.
+    fn starts_blocked(&self) -> bool {
+        self.selecting_position || self.closing
+    }
+
+    /// A worker that has already ended has nothing left to stop.
+    fn send_stop(&self) {
+        if let Some(worker) = &self.worker {
+            let _ = worker.send(Command::Stop);
+        }
+    }
+
     fn persist_config(&mut self, force: bool) -> Result<(), String> {
         if !force && !self.config_dirty {
             return Ok(());
@@ -402,7 +437,7 @@ impl qobject::AppController {
 
     /// Both start paths read and validate the live controls only on the Qt thread.
     fn collect_start_settings(mut self: Pin<&mut Self>) -> Option<ClickSettings> {
-        if *self.selecting_position() {
+        if self.rust().starts_blocked() {
             return None;
         }
         self.as_mut().clear_error();
@@ -472,6 +507,17 @@ impl qobject::AppController {
                 false
             }
         }
+    }
+
+    /// Start a close attempt: block starts and stop the run before saving, so a
+    /// failed save keeps the worker and its hotkey session.
+    pub fn begin_close(mut self: Pin<&mut Self>) {
+        self.as_mut().rust_mut().get_mut().begin_close();
+    }
+
+    /// Return to the application after a failed save.
+    pub fn cancel_close(mut self: Pin<&mut Self>) {
+        self.as_mut().rust_mut().get_mut().cancel_close();
     }
 
     /// End the worker with a bounded wait and clear running indicators during window closure.
@@ -1162,6 +1208,32 @@ mod tests {
         assert!(worker.send(Command::Stop).is_err());
         assert!(send_failure_ends_run(Some(&worker)));
         assert!(send_failure_ends_run(None));
+    }
+
+    #[test]
+    fn close_attempt_blocks_starts_and_stops_on_entry_and_return() {
+        let mut controller = AppControllerRust::from_config(AppConfig::default(), None);
+        // Without a worker there is nothing to stop.
+        controller.begin_close();
+        controller.cancel_close();
+        let (worker, side) = WorkerHandle::stalled(1);
+        controller.worker = Some(worker);
+        assert!(!controller.starts_blocked());
+        controller.begin_close();
+        assert!(controller.starts_blocked());
+        assert_eq!(side.stops(), 1);
+        // "Ohne Speichern schließen" closes again within the same attempt.
+        controller.begin_close();
+        assert_eq!(side.stops(), 2);
+        // The Stop on return outdates every start requested meanwhile.
+        controller.cancel_close();
+        assert!(!controller.starts_blocked());
+        assert_eq!(side.stops(), 3);
+        // Further rejections of the dialog do not stop a later run.
+        controller.cancel_close();
+        assert_eq!(side.stops(), 3);
+        // A failed save keeps the worker and its hotkey session.
+        assert!(controller.worker.is_some());
     }
 
     #[test]

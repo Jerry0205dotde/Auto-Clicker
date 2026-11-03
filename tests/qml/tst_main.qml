@@ -561,7 +561,9 @@ TestCase {
         // The header close button rejects the dialog.
         dialog.reject()
         tryCompare(dialog, "opened", false)
-        compare(controller.initializeCount, 1)
+        compare(controller.cancelCloseCount, 1)
+        compare(controller.closing, false)
+        compare(controller.initializeCount, 0)
     }
 
     function test_running_and_pending_runs_disable_settings() {
@@ -580,26 +582,35 @@ TestCase {
         controller.running = true
         main.close()
         compare(controller.saveCount, 1)
-        compare(controller.shutdownCount, 1)
+        // The run is stopped, but the worker and its hotkey session stay.
+        compare(controller.stops, 1)
         compare(controller.running, false)
+        compare(controller.closing, true)
+        compare(controller.shutdownCount, 0)
+        compare(controller.hotkey_ready, true)
         compare(main.visible, true)
         const dialog = findChild(main, "saveFailureDialog")
         verify(dialog !== null)
         tryCompare(dialog, "opened", true)
         keyClick(Qt.Key_Escape)
         compare(dialog.opened, true)
+        // Later worker errors do not replace the save error in the dialog.
+        controller.error_message = "Tastenkürzel nicht verfügbar"
+        compare(dialog.message, "Einstellungen konnten nicht gespeichert werden")
 
         controller.saveConfigSucceeds = true
         const continueEditing = findChild(main, "continueEditingButton")
         verify(continueEditing !== null)
         mouseClick(continueEditing)
-        compare(controller.initializeCount, 1)
-        compare(controller.hotkey_ready, false)
-        compare(controller.hotkey_pending, true)
-        compare(findChild(main, "startStopButton").enabled, false)
+        compare(controller.cancelCloseCount, 1)
+        compare(controller.closing, false)
+        compare(controller.initializeCount, 0)
+        compare(controller.shutdownCount, 0)
+        compare(controller.hotkey_ready, true)
+        compare(findChild(main, "startStopButton").enabled, true)
         main.close()
         compare(controller.saveCount, 2)
-        compare(controller.shutdownCount, 2)
+        compare(controller.shutdownCount, 1)
     }
 
     function test_discard_after_save_error_closes_without_retrying() {
@@ -612,7 +623,8 @@ TestCase {
         verify(discard !== null)
         mouseClick(discard)
         compare(controller.saveCount, 1)
-        compare(controller.shutdownCount, 2)
+        compare(controller.shutdownCount, 1)
+        compare(controller.initializeCount, 0)
     }
 
     function test_unchanged_window_does_not_rewrite_config() {

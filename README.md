@@ -100,7 +100,7 @@ Eine feste Position gilt nur für ihren ausgewählten Bildschirm, unabhängig vo
 
 ### Wann werden die Einstellungen gespeichert?
 
-Die Einstellungen werden beim Start eines Klicklaufs und beim Schließen gespeichert. Änderungen werden auch übernommen, wenn kein Lauf gestartet wurde. Schlägt das Speichern beim Schließen fehl, kannst du zur Anwendung zurückkehren oder **Ohne Speichern schließen** wählen. Beim Zurückkehren werden die Freigaben erneut angefragt: das Tastenkürzel sofort, die Maussteuerung beim nächsten Start.
+Die Einstellungen werden beim Start eines Klicklaufs und beim Schließen gespeichert. Änderungen werden auch übernommen, wenn kein Lauf gestartet wurde. Schlägt das Speichern beim Schließen fehl, kannst du zur Anwendung zurückkehren oder **Ohne Speichern schließen** wählen. Ein laufender Klicklauf wird dabei gestoppt; das Tastenkürzel bleibt eingerichtet, und es gibt keine erneute Freigabeabfrage.
 
 ### Warum öffnet sich kein zweites Fenster?
 
