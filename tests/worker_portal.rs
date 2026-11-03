@@ -12,6 +12,7 @@ use ashpd::zbus::{
 use klickmeister::{
     model::{ClickSettings, ClickType, MonitorGeometry, MouseButton},
     parent_window,
+    portal::PortalError,
     state::RunState,
     worker::{Command, HotkeyPhase, StartRequest, WorkerEvent, WorkerHandle},
 };
@@ -1929,9 +1930,6 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
     Ok(())
 }
 
-/// Part of the worker's error when a held click is not answered in 250 ms.
-const CLICK_TIMEOUT: &str = "nicht innerhalb von 250 ms bestätigt";
-
 /// Retry a scenario only when its held click outlived the worker's 250 ms
 /// event timeout, which a heavily loaded machine can cause. Every other
 /// failure, including a real regression, fails in each attempt.
@@ -1943,7 +1941,12 @@ where
     let mut result = scenario().await;
     for _ in 1..3 {
         match &result {
-            Err(error) if error.to_string().contains(CLICK_TIMEOUT) => {
+            // Match the variant's own text, so rewording it keeps the retry.
+            Err(error)
+                if error
+                    .to_string()
+                    .contains(&PortalError::EventTimeout.to_string()) =>
+            {
                 eprintln!("Held click timed out under load, retrying: {error}");
                 result = scenario().await;
             }
@@ -1951,6 +1954,26 @@ where
         }
     }
     result
+}
+
+/// Issue #98: the retry must recognise the worker's real timeout message, so
+/// rewording `PortalError::EventTimeout` cannot silently disable it.
+#[tokio::test]
+async fn click_timeout_retries_the_scenario() -> TestResult {
+    let attempts = std::sync::atomic::AtomicUsize::new(0);
+    retry_if_click_window_missed(|| async {
+        if attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+            // The worker reports the portal error through its Display text.
+            Err(PortalError::EventTimeout.to_string().into())
+        } else {
+            Ok(())
+        }
+    })
+    .await?;
+    ensure(
+        attempts.load(std::sync::atomic::Ordering::SeqCst) == 2,
+        "a click timeout must run the scenario again",
+    )
 }
 
 /// Fail without panicking, so the test still shuts its worker down.
