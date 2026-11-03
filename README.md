@@ -96,7 +96,7 @@ Für jeden Lauf muss das Tastenkürzel für Start und Stopp eingerichtet sein. F
 
 ### Warum wird eine feste Position nicht übernommen?
 
-Eine feste Position gilt nur für ihren ausgewählten Bildschirm, unabhängig vom Standort des Hauptfensters. Nach Änderungen an Anordnung, Auflösung oder Skalierung sowie bei einer fehlenden Bildschirmzuordnung muss die Position in Klickmeister geprüft und bestätigt werden.
+Eine feste Position gilt nur für ihren ausgewählten Bildschirm, unabhängig vom Standort des Hauptfensters. Wird dieser Bildschirm in der Anordnung verschoben, stoppt ein laufender Klicklauf mit fester Position. Die Position bleibt dabei bestätigt. Nach Änderungen an Auflösung oder Skalierung sowie bei einer fehlenden Bildschirmzuordnung muss die Position dagegen in Klickmeister geprüft und erneut bestätigt werden.
 
 ### Wann werden die Einstellungen gespeichert?
 
