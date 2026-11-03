@@ -69,6 +69,11 @@ struct Observed {
     /// Never send the Response to a hotkey CreateSession request.
     hold_hotkey_session: bool,
     close_after_hotkey_response: bool,
+    /// Remove the shortcut with ShortcutsChanged right before or after the
+    /// BindShortcuts response (`Some(true)` = after).
+    remove_around_hotkey_response: Option<bool>,
+    /// Press the shortcut right before the BindShortcuts response.
+    press_before_hotkey_response: bool,
     hotkey_seen: Arc<Notify>,
     hotkey_release: Arc<Notify>,
     hotkey_responded: Arc<Notify>,
@@ -360,7 +365,32 @@ impl FakeHotkeys {
             "shortcuts".into(),
             Value::new(shortcuts).try_into().map_err(failed)?,
         )]);
+        let remove = self
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove_around_hotkey_response;
+        if remove == Some(false) {
+            shortcuts_changed(connection, _session.as_str(), "")
+                .await
+                .map_err(failed)?;
+        }
+        let press = self
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .press_before_hotkey_response;
+        if press {
+            key_presses(connection, &_session, 1, 1)
+                .await
+                .map_err(failed)?;
+        }
         let response = respond(connection, &header, &options, results).await;
+        if remove == Some(true) {
+            shortcuts_changed(connection, _session.as_str(), "")
+                .await
+                .map_err(failed)?;
+        }
         let (close_after_response, responded) = {
             let state = self.0.lock().unwrap_or_else(|e| e.into_inner());
             (
@@ -866,6 +896,105 @@ async fn hotkey_closed_during_bind_cleans_up_and_ignores_late_response() -> Test
         revoked_hotkey_registration(false, stall_close).await?;
     }
     Ok(())
+}
+
+/// A shortcut removed around the BindShortcuts response, before the worker
+/// handed the registration over, must not be lost (issue #96).
+async fn hotkey_removed_around_bind_response(after_response: bool) -> TestResult {
+    let _serial = BUS_TEST_LOCK.lock().await;
+    let observed = Shared::default();
+    observed
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove_around_hotkey_response = Some(after_response);
+    let service = fake_portal(&observed).await?;
+    let (tx, mut events) = mpsc::unbounded_channel();
+    let worker = WorkerHandle::spawn(move |event| {
+        let _ = tx.send(event);
+    });
+    let result: TestResult = async {
+        let phases = events_until(&mut events, |e| {
+            matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable))
+        })
+        .await?;
+        // A change queued before the response is applied before the handoff.
+        // One sent after it may still briefly show Ready.
+        ensure(
+            after_response
+                || !phases
+                    .iter()
+                    .any(|e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Ready))),
+            "a shortcut removed before the bind response was reported Ready",
+        )?;
+        assert_hotkey_only(&phases);
+        events_until(&mut events, |e| matches!(e, WorkerEvent::Error(_))).await?;
+        worker.send(Command::Start(continuous()))?;
+        event(&mut events, |e| {
+            matches!(e, WorkerEvent::Error(message) if message.contains("Richte vor dem Start"))
+        })
+        .await?;
+        let state = observed.lock().unwrap_or_else(|e| e.into_inner());
+        ensure(
+            state.remote_session.is_none() && state.buttons.is_empty(),
+            "a removed shortcut must not allow a run",
+        )
+    }
+    .await;
+    tokio::task::spawn_blocking(move || worker.shutdown()).await?;
+    service.close().await?;
+    result
+}
+
+#[tokio::test]
+#[ignore = "requires a private D-Bus session via dbus-run-session"]
+async fn hotkey_removed_right_before_bind_response_is_never_ready() -> TestResult {
+    hotkey_removed_around_bind_response(false).await
+}
+
+#[tokio::test]
+#[ignore = "requires a private D-Bus session via dbus-run-session"]
+async fn hotkey_removed_right_after_bind_response_blocks_start() -> TestResult {
+    hotkey_removed_around_bind_response(true).await
+}
+
+#[tokio::test]
+#[ignore = "requires a private D-Bus session via dbus-run-session"]
+async fn hotkey_press_before_bind_response_does_not_start_after_ready() -> TestResult {
+    let _serial = BUS_TEST_LOCK.lock().await;
+    let observed = Shared::default();
+    observed
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .press_before_hotkey_response = true;
+    let service = fake_portal(&observed).await?;
+    let (tx, mut events) = mpsc::unbounded_channel();
+    let worker = WorkerHandle::spawn(move |event| {
+        let _ = tx.send(event);
+    });
+    let result: TestResult = async {
+        event(&mut events, |e| {
+            matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Ready))
+        })
+        .await?;
+        sleep(Duration::from_millis(300)).await;
+        while let Ok(event) = events.try_recv() {
+            ensure(
+                !matches!(
+                    event,
+                    WorkerEvent::StartRequested(_) | WorkerEvent::State(_)
+                ),
+                &format!("a press from before Ready started a run: {event:?}"),
+            )?;
+        }
+        // A press after Ready still starts.
+        key_presses(&service, &hotkey_session(&observed)?, 2, 1).await?;
+        start_request(&mut events).await?;
+        Ok(())
+    }
+    .await;
+    tokio::task::spawn_blocking(move || worker.shutdown()).await?;
+    service.close().await?;
+    result
 }
 
 #[tokio::test]
