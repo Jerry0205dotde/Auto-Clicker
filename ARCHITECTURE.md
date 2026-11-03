@@ -38,7 +38,7 @@ Während der Worker auf einen Klick wartet, stauen sich Hotkey-Signale in der Ho
 
 ## Scheduler
 
-`tokio::time::Instant` ist monoton. Der nächste Termin wird vom vorherigen Solltermin abgeleitet. Falls ein Portalaufruf länger als das Intervall dauert, werden verpasste Termine verworfen statt als Burst nachgeholt. Das Mindestintervall beträgt 10 ms (100 Klickzyklen/s). Es gibt keine Busy-Wait-Schleife.
+`tokio::time::Instant` ist monoton. Der nächste Termin wird vom vorherigen Solltermin abgeleitet. Ist er beim Ende eines Klicks schon verstrichen, weil die Portalaufrufe länger als das Intervall gedauert haben, folgt der nächste Klick sofort und ohne ein weiteres Intervall Pause. Weitere verpasste Termine werden verworfen statt als Burst nachgeholt; zwei Termine liegen immer mindestens ein Intervall auseinander. Das Mindestintervall beträgt 10 ms (100 Klickzyklen/s). Es gibt keine Busy-Wait-Schleife.
 
 ## Lebensdauer
 

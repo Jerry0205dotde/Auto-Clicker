@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+use tokio::time::Instant;
+
 #[derive(Debug, Clone)]
 pub struct Schedule {
     interval: Duration,
@@ -20,6 +22,14 @@ impl Schedule {
 
     pub const fn is_finished(&self) -> bool {
         matches!(self.remaining, Some(0))
+    }
+
+    /// Deadline of the next tick after the one due at `previous` finished at `now`.
+    ///
+    /// An overdue tick runs as soon as the previous click is done. Earlier missed
+    /// deadlines are dropped, and deadlines stay at least one interval apart.
+    pub fn next_deadline(&self, previous: Instant, now: Instant) -> Instant {
+        (previous + self.interval).max(now)
     }
 
     pub fn record_tick(&mut self) -> bool {
@@ -58,6 +68,39 @@ mod tests {
             }
             assert!(schedule.is_finished());
             assert!(!schedule.record_tick());
+        }
+    }
+
+    #[test]
+    fn overdue_ticks_run_once_without_waiting_another_interval() {
+        let interval = Duration::from_millis(10);
+        let schedule = Schedule::new(interval, None);
+        let start = Instant::now();
+        // On time: keep the grid.
+        assert_eq!(
+            schedule.next_deadline(start, start + Duration::from_millis(4)),
+            start + interval
+        );
+        // A click that ends after the next deadline is followed immediately.
+        for late in [Duration::from_micros(500), Duration::from_millis(37)] {
+            let now = start + interval + late;
+            assert_eq!(schedule.next_deadline(start, now), now);
+        }
+    }
+
+    #[test]
+    fn overdue_ticks_never_exceed_the_configured_rate() {
+        let interval = Duration::from_millis(10);
+        let schedule = Schedule::new(interval, None);
+        let mut deadline = Instant::now();
+        // Clicks alternately run short and far beyond several intervals.
+        for duration_ms in [2_u64, 45, 9, 11, 0, 30].iter().cycle().take(600) {
+            let previous = deadline;
+            let click_end = previous + Duration::from_millis(*duration_ms);
+            deadline = schedule.next_deadline(previous, click_end);
+            // No replayed burst: deadlines stay at least one interval apart.
+            assert!(deadline >= previous + interval);
+            assert!(deadline >= click_end);
         }
     }
 
