@@ -1216,9 +1216,7 @@ async fn run_worker(
                 if run.schedule.is_finished() {
                     stop_run(&mut machine, &mut active, &mut countdown, &emit);
                 } else {
-                    let scheduled = run.next_tick + run.schedule.interval();
-                    let now = Instant::now();
-                    run.next_tick = if scheduled > now { scheduled } else { now + run.schedule.interval() };
+                    run.next_tick = run.schedule.next_deadline(run.next_tick, Instant::now());
                 }
             }
         };

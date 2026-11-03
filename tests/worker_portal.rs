@@ -85,6 +85,10 @@ struct Observed {
     start_seen: Arc<Notify>,
     start_release: Arc<Notify>,
     delay_button: bool,
+    /// Answer this many next presses only after `press_delay`.
+    slow_presses: usize,
+    press_delay: Duration,
+    press_times: Vec<std::time::Instant>,
     button_seen: Arc<Notify>,
     button_release: Arc<Notify>,
     version_reads: usize,
@@ -93,6 +97,14 @@ struct Observed {
     version_release: Arc<Notify>,
 }
 type Shared = Arc<Mutex<Observed>>;
+
+/// How the fake portal holds a press reply.
+enum Hold {
+    /// Until the test releases it.
+    Until(Arc<Notify>, Arc<Notify>),
+    /// For a fixed time, like a slow portal.
+    For(Duration),
+}
 
 struct FakeRegistry(Shared);
 #[zbus::interface(name = "org.freedesktop.host.portal.Registry", crate = "ashpd::zbus")]
@@ -599,17 +611,29 @@ impl FakeRemote {
                 observed.button_failures[state as usize] -= 1;
                 return Err(failed("simulated button failure"));
             }
-            (state == 1 && observed.delay_button).then(|| {
-                (
-                    observed.button_seen.clone(),
-                    observed.button_release.clone(),
-                )
-            })
+            if state == 1 {
+                observed.press_times.push(std::time::Instant::now());
+            }
+            if state == 1 && observed.slow_presses > 0 {
+                observed.slow_presses -= 1;
+                Some(Hold::For(observed.press_delay))
+            } else {
+                (state == 1 && observed.delay_button).then(|| {
+                    Hold::Until(
+                        observed.button_seen.clone(),
+                        observed.button_release.clone(),
+                    )
+                })
+            }
         };
         // Hold the press reply, so the worker stays inside this click.
-        if let Some((seen, release)) = delay {
-            seen.notify_one();
-            release.notified().await;
+        match delay {
+            Some(Hold::Until(seen, release)) => {
+                seen.notify_one();
+                release.notified().await;
+            }
+            Some(Hold::For(duration)) => sleep(duration).await,
+            None => {}
         }
         Ok(())
     }
@@ -2511,6 +2535,72 @@ fn release_held_click(observed: &Shared, release: &Notify) {
         .unwrap_or_else(|e| e.into_inner())
         .delay_button = false;
     release.notify_one();
+}
+
+/// Issue #114: a click that overruns its interval is followed right away,
+/// without another interval of idle time and without replaying missed ticks.
+#[tokio::test]
+#[ignore = "requires a private D-Bus session via dbus-run-session"]
+async fn overdue_clicks_follow_immediately_without_a_burst() -> TestResult {
+    let _bus_guard = BUS_TEST_LOCK.lock().await;
+    let observed = Shared::default();
+    let service = fake_portal(&observed).await?;
+    let (tx, mut events) = mpsc::unbounded_channel();
+    let worker = WorkerHandle::spawn(move |event| {
+        let _ = tx.send(event);
+    });
+    let result: TestResult = async {
+        event(&mut events, |e| {
+            matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Ready))
+        })
+        .await?;
+        let interval = Duration::from_millis(60);
+        let slow = Duration::from_millis(150);
+        {
+            let mut state = observed.lock().unwrap_or_else(|e| e.into_inner());
+            // Each of the first two clicks misses more than two deadlines.
+            state.slow_presses = 2;
+            state.press_delay = slow;
+        }
+        worker.send(Command::Start(ClickSettings {
+            interval_ms: 60,
+            repeat: Some(6),
+            ..continuous()
+        }))?;
+        event(&mut events, |e| {
+            matches!(e, WorkerEvent::State(RunState::Clicking))
+        })
+        .await?;
+        event(&mut events, |e| {
+            matches!(e, WorkerEvent::State(RunState::Stopped))
+        })
+        .await?;
+        let (buttons, presses) = {
+            let state = observed.lock().unwrap_or_else(|e| e.into_inner());
+            (state.buttons.clone(), state.press_times.clone())
+        };
+        ensure(
+            buttons == [(0x110, 1), (0x110, 0)].repeat(6),
+            &format!("overdue ticks must keep the exact press/release pairs: {buttons:?}"),
+        )?;
+        let gaps: Vec<_> = presses.windows(2).map(|pair| pair[1] - pair[0]).collect();
+        // Waiting another interval after an overrun would take at least 210 ms.
+        ensure(
+            gaps[..2]
+                .iter()
+                .all(|gap| *gap >= slow && *gap < slow + interval / 2),
+            &format!("an overdue click must follow the slow one directly: {gaps:?}"),
+        )?;
+        // Replaying the missed deadlines would follow the fast click at once.
+        ensure(
+            gaps[2..].iter().all(|gap| *gap >= interval / 2),
+            &format!("missed deadlines must not be replayed as a burst: {gaps:?}"),
+        )
+    }
+    .await;
+    tokio::task::spawn_blocking(move || worker.shutdown()).await?;
+    service.close().await?;
+    result
 }
 
 /// Issue #16: Stop reaches a worker whose command queue is full, and the
