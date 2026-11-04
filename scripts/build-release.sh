@@ -39,11 +39,7 @@ export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-$(git log -1 --format=%ct)}"
 
 # Include the current checkout, including local source edits, without .git or
 # ignored build outputs. Freeze that exact snapshot before starting makepkg.
-git ls-files --cached --others --exclude-standard -z | sort -zu > "$work_dir/files"
-tar --no-recursion --null \
-  --mtime="@$SOURCE_DATE_EPOCH" --owner=0 --group=0 --numeric-owner \
-  --transform="s|^|Auto-Clicker-release-$pkgver/|" \
-  -czf "$dist_dir/$source_archive" --files-from="$work_dir/files"
+bash scripts/source-archive.sh "$dist_dir/$source_archive" "Auto-Clicker-release-$pkgver"
 source_sum="$(b2sum "$dist_dir/$source_archive" | cut -d' ' -f1)"
 
 python3 - "$work_dir/source/PKGBUILD" "$source_sum" <<'PY'
