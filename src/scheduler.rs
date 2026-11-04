@@ -59,7 +59,7 @@ mod tests {
 
     #[test]
     fn ten_minute_simulation_stops_at_each_supported_rate() {
-        for cps in [1_u64, 10, 50, 100] {
+        for cps in [1_u64, 10, 50, 100, 250, 500] {
             let interval = Duration::from_millis(1_000 / cps);
             let expected = 600 * cps;
             let mut schedule = Schedule::new(interval, Some(expected));

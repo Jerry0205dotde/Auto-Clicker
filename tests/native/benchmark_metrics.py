@@ -6,6 +6,7 @@ Pure functions without desktop dependencies, so they run in the unit tests.
 import math
 import statistics
 
+CLICKS = {"single": 1, "double": 2}
 PRESSES = ("MouseButtonPress", "MouseButtonDblClick")
 RELEASE = "MouseButtonRelease"
 

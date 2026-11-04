@@ -1,6 +1,5 @@
 use crate::model::{
-    ClickType, MAX_INTERVAL_MS, MAX_REPEAT_COUNT, MIN_INTERVAL_MS, MouseButton, PositionMode,
-    RepeatMode,
+    ClickType, MAX_INTERVAL_MS, MAX_REPEAT_COUNT, MouseButton, PositionMode, RepeatMode,
 };
 use serde::{Deserialize, Serialize};
 #[cfg(unix)]
@@ -51,7 +50,9 @@ impl Default for AppConfig {
 impl AppConfig {
     /// Limits hand-edited values to the ranges the UI can display and start with.
     fn clamp_to_valid_ranges(mut self) -> Self {
-        self.interval_ms = self.interval_ms.clamp(MIN_INTERVAL_MS, MAX_INTERVAL_MS);
+        self.interval_ms = self
+            .interval_ms
+            .clamp(self.click_type.min_interval_ms(), MAX_INTERVAL_MS);
         self.repeat_count = self.repeat_count.clamp(1, MAX_REPEAT_COUNT);
         self
     }
@@ -371,13 +372,22 @@ mod tests {
     #[test]
     fn clamps_out_of_range_values_on_load() {
         let too_small = test_path("too-small");
-        assert!(fs::write(&too_small, "interval_ms = 5\nrepeat_count = 0\n").is_ok());
-        let config = load_from(&too_small).ok();
-        assert_eq!(
-            config.as_ref().map(|config| config.interval_ms),
-            Some(MIN_INTERVAL_MS)
-        );
-        assert_eq!(config.map(|config| config.repeat_count), Some(1));
+        // Double clicks need twice the interval for the same click rate.
+        for (contents, interval_ms) in [
+            ("interval_ms = 1\nrepeat_count = 0\n", 2),
+            (
+                "click_type = \"double\"\ninterval_ms = 3\nrepeat_count = 0\n",
+                4,
+            ),
+        ] {
+            assert!(fs::write(&too_small, contents).is_ok());
+            let config = load_from(&too_small).ok();
+            assert_eq!(
+                config.as_ref().map(|config| config.interval_ms),
+                Some(interval_ms)
+            );
+            assert_eq!(config.map(|config| config.repeat_count), Some(1));
+        }
         let _ = fs::remove_file(too_small);
 
         let too_large = test_path("too-large");
@@ -399,10 +409,14 @@ mod tests {
         let _ = fs::remove_file(too_large);
 
         let at_bounds = test_path("at-bounds");
-        for (interval_ms, repeat_count) in
-            [(MIN_INTERVAL_MS, 1), (MAX_INTERVAL_MS, MAX_REPEAT_COUNT)]
-        {
-            let contents = format!("interval_ms = {interval_ms}\nrepeat_count = {repeat_count}\n");
+        for (click_type, interval_ms, repeat_count) in [
+            ("single", 2, 1),
+            ("double", 4, 1),
+            ("double", MAX_INTERVAL_MS, MAX_REPEAT_COUNT),
+        ] {
+            let contents = format!(
+                "click_type = \"{click_type}\"\ninterval_ms = {interval_ms}\nrepeat_count = {repeat_count}\n"
+            );
             assert!(fs::write(&at_bounds, contents).is_ok());
             let config = load_from(&at_bounds).ok();
             assert_eq!(

@@ -678,6 +678,9 @@ async fn setup_click_session(
 
 async fn wait_for_tick(deadline: Option<Instant>) {
     match deadline {
+        // The timer rounds every deadline up to its next millisecond, even
+        // one that has passed. A due tick must not wait for that.
+        Some(deadline) if deadline <= Instant::now() => {}
         Some(deadline) => sleep_until(deadline).await,
         None => future::pending().await,
     }
@@ -1757,6 +1760,19 @@ mod tests {
             session_idle: None,
         })
         .now_or_never()
+    }
+
+    /// Issue #117: the timer delayed a due tick to its next millisecond, which
+    /// was most of a cycle at 2 ms.
+    #[tokio::test]
+    async fn due_tick_wakes_without_waiting_for_the_timer() {
+        let (_worker, mut side) = WorkerHandle::stalled(1);
+        let due = Instant::now();
+        assert!(matches!(
+            wake_now(&mut side, None, Some(due)),
+            Some(Wake::ClickTick)
+        ));
+        assert!(wake_now(&mut side, None, Some(due + Duration::from_secs(1))).is_none());
     }
 
     #[tokio::test]

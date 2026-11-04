@@ -13,14 +13,13 @@ import tomllib
 from pathlib import Path
 
 from access import Atspi, action, find, nodes
-from benchmark import options
-from benchmark_metrics import analyze, check_events, cycles_for
+from benchmark import SLOW_RUN_FACTOR, options
+from benchmark_metrics import CLICKS, analyze, check_events, cycles_for
 from control import BASE, mark, rpc, wait_for
 from portal_cases import PORTAL_APP, frame, grant_remote
 from scenarios import choose, fixed_point, focus_app, focus_target, key, kwin, status
 
 PIDS = json.loads((BASE / "pids.json").read_text())
-CLICKS = {"single": 1, "double": 2}
 HOTKEY = 0xFF13  # Pause, as written by run.py
 TICKS = os.sysconf("SC_CLK_TCK")
 
@@ -237,7 +236,8 @@ def counted_run(gui, mode, interval, cycles, quiet):
     assert poll_until(tail.poll, 10), "Run did not start"
     first = Usage()
     assert poll_until(
-        lambda: len(tail.poll()) >= expected, 2 * cycles * interval / 1000 + 10
+        lambda: len(tail.poll()) >= expected,
+        SLOW_RUN_FACTOR * cycles * interval / 1000 + 10,
     ), (len(tail.events), expected)
     last = Usage()
     wait_for(lambda: "Gestoppt" in gui.text())
@@ -251,6 +251,7 @@ def counted_run(gui, mode, interval, cycles, quiet):
         mode=mode,
         interval_ms=interval,
         target_cycles_per_s=1000 / interval,
+        target_clicks_per_s=CLICKS[mode] * 1000 / interval,
         start_to_first_event_ms=(tail.events[0]["t_ns"] - triggered) / 1e6,
         **result,
         **last.since(first),
@@ -317,9 +318,10 @@ def report(env):
                 ("Modus", "mode", 6, ""),
                 ("ms", "interval_ms", 4, ""),
                 ("Zyklen", "cycles", 6, ""),
-                ("Soll/s", "target_cycles_per_s", 6, ".2f"),
-                ("Zyklen/s", "cycles_per_s", 8, ".2f"),
-                ("Klicks/s", "clicks_per_s", 8, ".2f"),
+                ("Soll-Zyklen/s", "target_cycles_per_s", 13, ".2f"),
+                ("Ist-Zyklen/s", "cycles_per_s", 12, ".2f"),
+                ("Soll-Klicks/s", "target_clicks_per_s", 13, ".2f"),
+                ("Ist-Klicks/s", "clicks_per_s", 12, ".2f"),
                 ("Median", "gap_median_ms", 6, ".2f"),
                 ("P95", "gap_p95_ms", 6, ".2f"),
                 ("P99", "gap_p99_ms", 6, ".2f"),
@@ -361,14 +363,13 @@ def main():
     mark("benchmark_environment", **env)
     gui = Gui()
     warm_up(gui)
-    for interval in args.intervals:
-        for mode in args.modes:
-            counted_run(
-                gui, mode, interval, cycles_for(args.duration, interval), args.quiet
-            )
+    for mode, interval in args.runs:
+        counted_run(
+            gui, mode, interval, cycles_for(args.duration, interval), args.quiet
+        )
     for method in ("button", "hotkey"):
         for _ in range(args.stop_repeats):
-            stop_run(gui, method, min(args.intervals), args.stop_after, args.quiet)
+            stop_run(gui, method, args.stop_interval, args.stop_after, args.quiet)
     report(env)
 
 

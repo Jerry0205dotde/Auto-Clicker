@@ -2,8 +2,10 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use thiserror::Error;
 
-pub const MAX_CYCLES_PER_SECOND: u32 = 100;
-pub const MIN_INTERVAL_MS: u64 = 1_000 / MAX_CYCLES_PER_SECOND as u64;
+/// Highest rate of single clicks (press/release pairs), for every click type.
+pub const MAX_CLICKS_PER_SECOND: u64 = 500;
+/// Shortest interval of any click type: single clicks at the maximum rate.
+pub const MIN_INTERVAL_MS: u64 = ClickType::Single.min_interval_ms();
 pub const MAX_INTERVAL_MS: u64 = 86_400_000;
 pub const MAX_REPEAT_COUNT: u64 = 10_000_000;
 /// Largest fixed-position coordinate on either axis.
@@ -67,6 +69,12 @@ impl ClickType {
             Self::Double => 2,
         }
     }
+
+    /// Shortest interval that keeps this click type at or below the maximum
+    /// click rate: 2 ms for single and 4 ms for double clicks.
+    pub const fn min_interval_ms(self) -> u64 {
+        1_000 * self.clicks_per_tick() as u64 / MAX_CLICKS_PER_SECOND
+    }
 }
 
 /// Index of the click type in the UI and its controller property.
@@ -126,9 +134,9 @@ pub struct ClickSettings {
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ValidationError {
     #[error(
-        "Wähle ein Klickintervall von mindestens {MIN_INTERVAL_MS} ms (höchstens {MAX_CYCLES_PER_SECOND} Klickzyklen/s)."
+        "Wähle ein Klickintervall von mindestens {min_interval_ms} ms (höchstens {MAX_CLICKS_PER_SECOND} Klicks/s)."
     )]
-    IntervalTooShort,
+    IntervalTooShort { min_interval_ms: u64 },
     #[error("Wähle ein Klickintervall von höchstens 24 Stunden.")]
     IntervalTooLong,
     #[error("Wähle zwischen 1 und {MAX_REPEAT_COUNT} Klickzyklen.")]
@@ -150,7 +158,7 @@ pub enum ValidationError {
 impl ClickSettings {
     /// Validate timing, repeat limits and fixed coordinates against their monitor.
     pub fn validate(&self) -> Result<(), ValidationError> {
-        validate_interval(self.interval_ms)?;
+        validate_interval(self.interval_ms, self.click_type)?;
         if let Some(repeat) = self.repeat
             && !(1..=MAX_REPEAT_COUNT).contains(&repeat)
         {
@@ -180,10 +188,11 @@ impl ClickSettings {
     }
 }
 
-/// Enforce the supported interval range and maximum click cycle rate.
-pub fn validate_interval(interval_ms: u64) -> Result<(), ValidationError> {
-    if interval_ms < MIN_INTERVAL_MS {
-        Err(ValidationError::IntervalTooShort)
+/// Enforce the supported interval range and maximum click rate.
+pub fn validate_interval(interval_ms: u64, click_type: ClickType) -> Result<(), ValidationError> {
+    let min_interval_ms = click_type.min_interval_ms();
+    if interval_ms < min_interval_ms {
+        Err(ValidationError::IntervalTooShort { min_interval_ms })
     } else if interval_ms > MAX_INTERVAL_MS {
         Err(ValidationError::IntervalTooLong)
     } else {
@@ -207,15 +216,43 @@ mod tests {
     }
 
     #[test]
-    fn validates_interval_and_cps_limit() {
-        assert_eq!(validate_interval(0), Err(ValidationError::IntervalTooShort));
-        assert_eq!(validate_interval(9), Err(ValidationError::IntervalTooShort));
-        assert!(validate_interval(10).is_ok());
-        assert!(validate_interval(1_000).is_ok());
+    fn validates_interval_and_click_rate_limit() {
+        // 500 single clicks/s: 500 single or 250 double cycles per second.
+        for (click_type, min_interval_ms) in [(ClickType::Single, 2), (ClickType::Double, 4)] {
+            assert_eq!(click_type.min_interval_ms(), min_interval_ms);
+            for too_short in [0, min_interval_ms - 1] {
+                assert_eq!(
+                    validate_interval(too_short, click_type),
+                    Err(ValidationError::IntervalTooShort { min_interval_ms })
+                );
+            }
+            for valid in [min_interval_ms, 10, 1_000, MAX_INTERVAL_MS] {
+                assert!(validate_interval(valid, click_type).is_ok());
+            }
+            assert_eq!(
+                validate_interval(MAX_INTERVAL_MS + 1, click_type),
+                Err(ValidationError::IntervalTooLong)
+            );
+        }
+        assert_eq!(MIN_INTERVAL_MS, 2);
         assert_eq!(
-            validate_interval(MAX_INTERVAL_MS + 1),
-            Err(ValidationError::IntervalTooLong)
+            ValidationError::IntervalTooShort { min_interval_ms: 4 }.to_string(),
+            "Wähle ein Klickintervall von mindestens 4 ms (höchstens 500 Klicks/s)."
         );
+    }
+
+    #[test]
+    fn settings_apply_the_limit_of_their_click_type() {
+        let mut settings = valid_settings();
+        settings.interval_ms = 2;
+        assert!(settings.validate().is_ok());
+        settings.click_type = ClickType::Double;
+        assert_eq!(
+            settings.validate(),
+            Err(ValidationError::IntervalTooShort { min_interval_ms: 4 })
+        );
+        settings.interval_ms = 4;
+        assert!(settings.validate().is_ok());
     }
 
     #[test]

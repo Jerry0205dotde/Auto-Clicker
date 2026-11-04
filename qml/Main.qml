@@ -31,7 +31,7 @@ Kirigami.ApplicationWindow {
 
     // SpinBox parses its text on focus loss or Enter and clamps the result to
     // from/to. Empty or unfinished text keeps the last valid value instead of
-    // silently becoming a limit such as the 10 ms maximum rate or a screen edge.
+    // silently becoming a limit such as the 2 ms maximum rate or a screen edge.
     function parseSpinBoxText(spinBox, text, locale) {
         let parsed = NaN
         try { parsed = Number.fromLocaleString(locale, text) } catch (error) {}
@@ -526,7 +526,12 @@ Kirigami.ApplicationWindow {
                     { value: 0, text: qsTr("1×"), description: qsTr("Einzelklick") },
                     { value: 1, text: qsTr("2×"), description: qsTr("Doppelklick") }
                 ]
-                onSelected: choice => { controller.click_type = choice; controller.mark_settings_changed() }
+                // Double clicks need a longer interval for the same click rate.
+                onSelected: choice => {
+                    controller.click_type = choice
+                    controller.interval_ms = Math.max(controller.interval_ms, controller.min_interval_ms_for(choice))
+                    controller.mark_settings_changed()
+                }
             }
 
             Controls.Label {
@@ -541,7 +546,7 @@ Kirigami.ApplicationWindow {
                     objectName: "intervalInput"
                     Layout.fillWidth: true
                     Layout.minimumWidth: 0
-                    from: controller.min_interval_ms
+                    from: controller.min_interval_ms_for(controller.click_type)
                     to: controller.max_interval_ms
                     stepSize: 10
                     editable: true

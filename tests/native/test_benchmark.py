@@ -78,6 +78,25 @@ class OptionTests(unittest.TestCase):
         self.assertEqual(args.modes, ["single", "double"])
         self.assertGreater(estimated_timeout(args), 2 * 60 * 2)
 
+    def test_rates_set_the_interval_per_mode(self):
+        args = options(["--rates", "100,500"])
+        self.assertEqual(
+            args.runs,
+            [("single", 10), ("double", 20), ("single", 2), ("double", 4)],
+        )
+        self.assertEqual(args.stop_interval, 2)
+        self.assertEqual(options(["--rates", "250", "--long"]).runs[0], ("single", 10))
+
+    def test_rejects_rates_and_intervals_beyond_the_app_limits(self):
+        for argv in (
+            ["--rates", "300"],
+            ["--rates", "1000"],
+            ["--intervals", "1"],
+            ["--intervals", "2", "--modes", "double"],
+        ):
+            with self.subTest(argv=argv), self.assertRaises(SystemExit):
+                options(argv)
+
     def test_rejects_unknown_modes(self):
         with self.assertRaises(SystemExit):
             options(["--modes", "triple"])

@@ -73,7 +73,7 @@ CXX-Qt erzeugt die notwendige Qt-FFI und enthält intern `unsafe`; der handgesch
 - Eine kompromittierte Portal-/Compositorimplementierung liegt außerhalb der Vertrauensgrenze der Anwendung.
 - Bei fester Position stellt das Portal prinzipiell einen Streamhandle bereit. Klickmeister öffnet ihn nicht; eine spätere Codeänderung an diesem Punkt muss erneut geprüft werden.
 - Abhängigkeiten bilden Supply-Chain-Risiken. `Cargo.lock`, Arch-Paketsignaturen, `cargo deny` und Review von Dependency-Änderungen sind die vorgesehenen Kontrollen.
-- Doppelklick erzeugt pro begrenztem Scheduler-Tick zwei Press/Release-Paare. Damit liegt die Zyklusrate bei höchstens 100 CPS, die Button-Ereigniszahl naturgemäß höher. Es gibt weiterhin keine ungebremste Schleife.
+- Doppelklick erzeugt pro begrenztem Scheduler-Tick zwei Press/Release-Paare. Die Zyklusrate ist so begrenzt, dass höchstens 500 einzelne Klicks pro Sekunde geplant werden (Einzelklick 500, Doppelklick 250 Zyklen/s). Es gibt weiterhin keine ungebremste Schleife.
 
 ## Review-Checkliste
 
