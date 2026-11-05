@@ -1,9 +1,9 @@
-"""Exact monitor identity serialization for the native scenario starter."""
+"""Monitor identity serialization and portal pre-check of the native starter."""
 
 import tomllib
 import unittest
 
-from run import config_text, monitor_identity
+from run import APP_ID, config_text, monitor_identity, registration_problem
 
 
 class MonitorIdentityTests(unittest.TestCase):
@@ -44,6 +44,52 @@ class MonitorIdentityTests(unittest.TestCase):
         text = config_text(screen)
         self.assertNotIn("\x7f", text)
         self.assertEqual(tomllib.loads(text)["monitor_identity"], identity)
+
+
+class FakeDBusError(Exception):
+    def __init__(self, name, message):
+        super().__init__(message)
+        self.name = name
+
+    def get_dbus_name(self):
+        return self.name
+
+
+def raising(error):
+    def register():
+        raise error
+
+    return register
+
+
+class RegistrationTests(unittest.TestCase):
+    def test_accepted_registration_passes(self):
+        self.assertIsNone(registration_problem(lambda: None))
+
+    def test_rejection_names_the_cause_and_the_setup(self):
+        # xdg-desktop-portal 1.22.1 with Exec=klickmeister outside its PATH.
+        message = f"Could not register app ID: App info not found for '{APP_ID}'"
+        problem = registration_problem(
+            raising(FakeDBusError("org.freedesktop.portal.Error.Failed", message))
+        )
+        self.assertIn(message, problem)
+        self.assertIn("absolute Exec", problem)
+        self.assertIn("Desktop-Integration", problem)
+
+    def test_portals_without_registry_pass(self):
+        for name in (
+            "org.freedesktop.DBus.Error.ServiceUnknown",
+            "org.freedesktop.DBus.Error.UnknownInterface",
+            "org.freedesktop.DBus.Error.UnknownMethod",
+        ):
+            with self.subTest(name=name):
+                self.assertIsNone(
+                    registration_problem(raising(FakeDBusError(name, "missing")))
+                )
+
+    def test_other_errors_are_not_reported_as_rejections(self):
+        with self.assertRaises(ModuleNotFoundError):
+            registration_problem(raising(ModuleNotFoundError("dbus")))
 
 
 if __name__ == "__main__":

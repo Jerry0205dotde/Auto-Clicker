@@ -142,7 +142,7 @@ Die QML-Tests verwenden den KDE-Control-Stil und einen Controller-Testersatz. Di
 
 Tastenkürzel-Signale, die sich während eines Laufs angestaut haben, dürfen diesen noch stoppen, danach aber keinen neuen Lauf starten. Eine neue Betätigung nach dem Stopp startet wie gewohnt.
 
-Echte KDE-Dialoge und die Zeigersteuerung auf physischen Bildschirmen werden zusätzlich in einer nativen Plasma-Wayland-Sitzung geprüft. Die Werkzeuge und Voraussetzungen dafür sind unter [tests/native](tests/native/README.md) dokumentiert.
+Echte KDE-Dialoge und die Zeigersteuerung auf physischen Bildschirmen werden zusätzlich in einer nativen Plasma-Wayland-Sitzung geprüft. Die Werkzeuge und Voraussetzungen dafür sind unter [tests/native](tests/native/README.md) dokumentiert; das gebaute Programm braucht dafür die [Desktop-Integration](#desktop-integration).
 
 Prüfe den Start-Countdown manuell an einem eigenen Testziel: Vor Ablauf der drei Sekunden darf kein Klick erfolgen. **Start abbrechen** und das Tastenkürzel müssen den Countdown ohne Klick beenden. Wiederhole die Prüfung mit bereits erteilter Freigabe. Starts per Tastenkürzel und mit fester Position müssen ohne Countdown beginnen.
 
@@ -160,7 +160,23 @@ Führe zuerst `cargo build --locked` und danach `bash scripts/setup-qmlls.sh` au
 
 ### Desktop-Integration
 
-Der Qt-Desktop-Dateiname lautet `io.github.jerry0205.klickmeister` und entspricht der installierten `.desktop`-Datei. Der QML-Smoke-Test prüft diesen Wert. Klickmeister meldet auch seine separaten D-Bus-Verbindungen vor dem ersten Portalaufruf mit dieser ID bei der [Portal-Registry](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.host.portal.Registry.html) an. Damit funktioniert die Zuordnung auch beim direkten Start der Binärdatei. Die `.desktop`-Datei muss im Anwendungsverzeichnis installiert sein; für Entwicklungsprüfungen genügt `~/.local/share/applications/`. Bei älteren Portaldiensten ohne Registry erfolgt die Zuordnung weiterhin über den Startkontext. Unter derselben ID belegt Klickmeister den D-Bus-Namen `io.github.jerry0205.klickmeister` als Sperre gegen eine zweite Instanz und bietet dort `org.freedesktop.Application.Activate` an. Der Bus gibt den Namen mit der Verbindung frei, auch nach einem Absturz.
+Der Qt-Desktop-Dateiname lautet `io.github.jerry0205.klickmeister` und entspricht der installierten `.desktop`-Datei. Der QML-Smoke-Test prüft diesen Wert. Klickmeister meldet auch seine separaten D-Bus-Verbindungen vor dem ersten Portalaufruf mit dieser ID bei der [Portal-Registry](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.host.portal.Registry.html) an. Damit funktioniert die Zuordnung auch beim direkten Start der Binärdatei. Bei älteren Portaldiensten ohne Registry erfolgt die Zuordnung weiterhin über den Startkontext. Unter derselben ID belegt Klickmeister den D-Bus-Namen `io.github.jerry0205.klickmeister` als Sperre gegen eine zweite Instanz und bietet dort `org.freedesktop.Application.Activate` an. Der Bus gibt den Namen mit der Verbindung frei, auch nach einem Absturz.
+
+Das Portal nimmt die Anmeldung nur an, wenn GLib die `.desktop`-Datei in einem Anwendungsverzeichnis findet und ihr `Exec`-Programm auflösen kann. Maßgeblich ist der `PATH` des Portaldienstes, nicht der der Shell; ein Verzeichnis wie `~/.local/bin`, das nur die Shell-Konfiguration ergänzt, genügt deshalb meist nicht. Sonst lehnt das Portal mit `App info not found` ab, das Tastenkürzel bleibt nicht verfügbar und Starten gesperrt. Ein installiertes Paket erfüllt beides mit `/usr/bin/klickmeister`. Für ein gebautes Programm außerhalb des `PATH` eine der beiden Varianten einrichten. Entweder den Build in den `PATH` des Portals verlinken und die unveränderte Datei installieren:
+
+```bash
+sudo ln -sf "$PWD/target/release/klickmeister" /usr/local/bin/klickmeister
+install -Dm644 packaging/io.github.jerry0205.klickmeister.desktop -t ~/.local/share/applications/
+```
+
+Oder eine lokale Datei mit absolutem `Exec` verwenden:
+
+```bash
+mkdir -p ~/.local/share/applications
+sed "s|^Exec=.*|Exec=$PWD/target/release/klickmeister|" packaging/io.github.jerry0205.klickmeister.desktop > ~/.local/share/applications/io.github.jerry0205.klickmeister.desktop
+```
+
+Die lokale Datei überdeckt die eines installierten Pakets; nach der Prüfung Link und Datei wieder entfernen. Läuft Klickmeister schon, versucht **Erneut versuchen** die Anmeldung danach noch einmal.
 
 Details zum Aufbau und zu Sicherheitsentscheidungen stehen in [ARCHITECTURE.md](ARCHITECTURE.md) und [SECURITY_REVIEW.md](SECURITY_REVIEW.md).
 
