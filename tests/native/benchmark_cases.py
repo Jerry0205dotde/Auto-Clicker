@@ -22,6 +22,10 @@ from scenarios import choose, fixed_point, focus_app, focus_target, key, kwin, s
 PIDS = json.loads((BASE / "pids.json").read_text())
 HOTKEY = 0xFF13  # Pause, as written by run.py
 TICKS = os.sysconf("SC_CLK_TCK")
+TARGET_REPAINT = {
+    "limited": "Neuzeichnen höchstens alle 100 ms (--target-repaint limited)",
+    "event": "Neuzeichnen nach jedem Mausereignis (--target-repaint event)",
+}
 
 
 class EventTail:
@@ -128,6 +132,7 @@ def environment():
     cpus = Path("/proc/cpuinfo").read_text().splitlines()
     from PySide6 import QtCore
 
+    state = rpc("target", cmd="state")
     return {
         "commit": commit,
         "uncommitted_changes": None if changes is None else bool(changes),
@@ -154,7 +159,8 @@ def environment():
         "kwin": command("kwin_wayland", "--version"),
         "session": os.environ.get("XDG_SESSION_TYPE"),
         "desktop": os.environ.get("XDG_CURRENT_DESKTOP"),
-        "screen": rpc("target", cmd="state")["screen"],
+        "screen": state["screen"],
+        "target_repaint": state["repaint"],
     }
 
 
@@ -310,6 +316,7 @@ def report(env):
     runs = [r for r in rows if r["test"] == "benchmark_run"]
     stops = [r for r in rows if r["test"] == "benchmark_stop"]
     print("\nUmgebung:", json.dumps(env, ensure_ascii=False))
+    print(f"\nTestziel: {TARGET_REPAINT[env['target_repaint']]}")
     print("\nKlickläufe (Abstände der Zyklusbeginne in ms):")
     print(
         table(
