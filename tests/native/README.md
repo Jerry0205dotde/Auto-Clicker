@@ -2,7 +2,12 @@
 
 Aus dem Projektverzeichnis, in einer entsperrten **deutschen Plasma-Wayland-Sitzung
 mit genau einem Monitor**. Benötigt werden Python mit PySide6, dbus-python,
-PyGObject/AT-SPI, `qdbus6` und das gebaute Release-Programm.
+PyGObject/AT-SPI, `qdbus6` und das gebaute Release-Programm mit eingerichteter
+[Desktop-Integration](../../README.md#desktop-integration). Die `.desktop`-Datei allein
+genügt nicht, das Portal muss auch ihr `Exec` auflösen können. `run.py` und damit
+auch `benchmark.py` melden sich deshalb vorab mit einer Wegwerf-Verbindung bei der
+Portal-Registry an und brechen bei einer Ablehnung mit Ursache und Abhilfe ab,
+bevor ein Fenster startet.
 Diese Tests steuern den sichtbaren Desktop und bestätigen die eigenen KDE-Dialoge.
 Währenddessen den Desktop nicht anderweitig bedienen und keine andere Klickmeister-
 Instanz starten; läuft bereits eine, zeigt der Teststart nur deren Fenster an und endet. Globale Tastenkürzel dürfen nicht parallel umkonfiguriert werden.

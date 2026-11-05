@@ -13,6 +13,56 @@ from pathlib import Path
 
 from guard import supervise, terminate
 
+APP_ID = "io.github.jerry0205.klickmeister"
+# Without Registry, older portal frontends identify the app by its launch context.
+NO_REGISTRY = {
+    "org.freedesktop.DBus.Error.ServiceUnknown",
+    "org.freedesktop.DBus.Error.UnknownInterface",
+    "org.freedesktop.DBus.Error.UnknownMethod",
+}
+
+
+def portal_register():
+    """Register a throwaway connection under the app ID, as the app does."""
+    import dbus
+
+    bus = dbus.bus.BusConnection(dbus.bus.BUS_SESSION)
+    try:
+        bus.get_object(
+            "org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop"
+        ).Register(
+            APP_ID,
+            {},
+            dbus_interface="org.freedesktop.host.portal.Registry",
+            signature="sa{sv}",
+        )
+    finally:
+        bus.close()
+
+
+def registration_problem(register=portal_register):
+    """Explain why the portal would reject the app ID, or return None.
+
+    The portal resolves the desktop file with its own PATH and drops it when
+    Exec=klickmeister is not found there, so an installed file is not enough.
+    """
+    try:
+        register()
+    except Exception as error:
+        name = getattr(error, "get_dbus_name", lambda: None)()
+        if name is None:
+            raise
+        if name in NO_REGISTRY:
+            return None
+        return (
+            f"The portal rejects the app ID {APP_ID}: {error}\n"
+            f"Install {APP_ID}.desktop into an applications directory and let the "
+            "portal resolve its Exec: link the build into the portal's PATH, use a "
+            "local desktop file with an absolute Exec, or install the package. "
+            "See README.md, Desktop-Integration."
+        )
+    return None
+
 
 def monitor_identity(screen):
     """Match JSON.stringify in MonitorSelection.qml, including integral floats."""
@@ -44,6 +94,9 @@ def config_text(screen):
 
 
 def run(binary, timeout, scenario_path, scenario_args=(), keep_artifacts=True):
+    problem = registration_problem()
+    if problem:
+        raise SystemExit(problem)
     base = Path(tempfile.mkdtemp(prefix="klickmeister-native-"))
     os.environ["KLICKMEISTER_NATIVE_DIR"] = str(base)
     os.environ["XDG_CONFIG_HOME"] = str(base / "config")
