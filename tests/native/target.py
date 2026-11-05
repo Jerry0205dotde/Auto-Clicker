@@ -12,6 +12,13 @@ base = os.environ["KLICKMEISTER_NATIVE_DIR"]
 app = QApplication(sys.argv)
 app.setApplicationName("Klickmeister Native Test Target")
 log = open(base + "/mouse-events.jsonl", "a", buffering=1)
+# "event" repaints after every mouse event. "limited" repaints at most every
+# REPAINT_MS: a full-screen repaint per event costs the target more CPU than
+# the clicker and caps the measured click rate. Logging is the same in both.
+REPAINT = os.environ.get("KLICKMEISTER_NATIVE_TARGET_REPAINT", "event")
+if REPAINT not in ("event", "limited"):
+    raise RuntimeError(f"Unbekannter Neuzeichnen-Modus: {REPAINT}")
+REPAINT_MS = 100
 
 
 class Target(QWidget):
@@ -22,6 +29,10 @@ class Target(QWidget):
         self.setMouseTracking(True)
         self.count = 0
         self.last_point = None
+        self.repaint_timer = QTimer(self)
+        self.repaint_timer.setSingleShot(True)
+        self.repaint_timer.setInterval(REPAINT_MS)
+        self.repaint_timer.timeout.connect(self.update)
 
     def paintEvent(self, event):
         p = QPainter(self)
@@ -73,7 +84,10 @@ class Target(QWidget):
                 )
                 + "\n"
             )
-            self.update()
+            if REPAINT == "event":
+                self.update()
+            elif not self.repaint_timer.isActive():
+                self.repaint_timer.start()
         elif e.type() in (QEvent.KeyPress, QEvent.KeyRelease):
             log.write(
                 json.dumps(
@@ -121,6 +135,7 @@ def accept():
                 "active": w.isActiveWindow(),
                 "visible": w.isVisible(),
                 "geometry": [g.x(), g.y(), g.width(), g.height()],
+                "repaint": REPAINT,
                 "screen": {
                     "name": s.name(),
                     "manufacturer": s.manufacturer(),

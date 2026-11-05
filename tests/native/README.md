@@ -85,6 +85,13 @@ python tests/native/benchmark.py --modes double --intervals 10 --duration 20
 python tests/native/benchmark.py --rates 100,250,500   # geplante Klicks/s
 ```
 
+Das Testziel zeichnet im Benchmark höchstens alle 100 ms neu
+(`--target-repaint limited`). Ein Neuzeichnen des ganzen Vollbilds nach jedem
+Mausereignis belastet das Testziel sonst stärker als die App und begrenzt die
+gemessene Klickrate. `--target-repaint event` zeichnet wie in den
+Regressionstests nach jedem Ereignis neu. Protokoll, Prüfungen und Wächter sind in
+beiden Varianten gleich; die Ausgabe nennt die verwendete Variante. Gemessene
+Klickraten deshalb immer mit Zielvariante angeben.
 Weitere Optionen zeigt `--help`. Fragt KDE beim ersten Start nach dem globalen
 Tastenkürzel, diesen Dialog selbst bestätigen; der Benchmark wartet bis zu 120 s
 auf `Bereit` und bestätigt erst danach die Fernsteuerung für den Eingabetreiber.

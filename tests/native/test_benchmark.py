@@ -101,6 +101,14 @@ class OptionTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             options(["--modes", "triple"])
 
+    def test_target_repaints_limited_unless_asked_for_every_event(self):
+        self.assertEqual(options([]).target_repaint, "limited")
+        self.assertEqual(
+            options(["--target-repaint", "event"]).target_repaint, "event"
+        )
+        with self.assertRaises(SystemExit):
+            options(["--target-repaint", "never"])
+
 
 if __name__ == "__main__":
     unittest.main()

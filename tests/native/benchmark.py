@@ -5,6 +5,7 @@ values for this machine and session, not pass/fail limits.
 """
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -80,6 +81,13 @@ def options(argv=None):
         help="stop measurements per method (button, hotkey); 0 skips them",
     )
     parser.add_argument(
+        "--target-repaint",
+        choices=["limited", "event"],
+        default="limited",
+        help="limited: target repaints at most every 100 ms (default); "
+        "event: after every mouse event, as in the regression tests",
+    )
+    parser.add_argument(
         "--stop-after", type=float, default=1, help="seconds of clicking before a stop"
     )
     parser.add_argument(
@@ -125,6 +133,7 @@ def main():
     args = options()
     from run import run
 
+    os.environ["KLICKMEISTER_NATIVE_TARGET_REPAINT"] = args.target_repaint
     return run(
         args.binary,
         args.timeout or estimated_timeout(args),
