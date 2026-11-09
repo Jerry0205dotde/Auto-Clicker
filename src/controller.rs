@@ -381,6 +381,10 @@ impl AppControllerRust {
     }
 
     fn persist_config(&mut self, force: bool) -> Result<(), String> {
+        // Without a usable HOME, closing with unchanged settings must not fail.
+        if !force && !self.config_dirty {
+            return Ok(());
+        }
         let path = config::config_path().map_err(|error| error.to_string())?;
         self.persist_config_to(&path, force)
     }
