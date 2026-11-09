@@ -127,9 +127,8 @@ Cargo-Befehle bauen den aktuellen Checkout einschließlich lokaler Änderungen. 
 ```bash
 cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
-cargo test --locked --all-targets
 cargo deny check advisories bans licenses sources # cargo-deny, Regeln in deny.toml
-dbus-run-session -- cargo test --locked --all-targets -- --ignored
+dbus-run-session -- cargo test --locked --all-targets -- --include-ignored
 cargo build --locked --release
 bash tests/qml-smoke.sh target/release/klickmeister
 QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software QT_QUICK_CONTROLS_STYLE=org.kde.desktop /usr/lib/qt6/bin/qmltestrunner -import tests/qml/mocks -input tests/qml

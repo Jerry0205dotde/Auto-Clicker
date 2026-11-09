@@ -133,5 +133,9 @@ mod tests {
         assert_eq!(machine.state(), RunState::Closing);
         assert!(!machine.request_start());
         assert!(!machine.stop());
+        // A late failure while closing must not reopen the machine.
+        machine.fail();
+        assert_eq!(machine.state(), RunState::Closing);
+        assert!(!machine.request_start());
     }
 }

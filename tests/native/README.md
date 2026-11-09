@@ -28,7 +28,7 @@ leere zugängliche Buttonnamen; nur bei
 exakt passendem Dialog und Buttonanzahl wird die visuell geprüfte Reihenfolge
 verwendet. Andere Sprachen/Layouts müssen vor Wiederverwendung angepasst werden.
 
-Die Tests prüfen Positionswahl ohne Screenshot-Dialog, Klicks und Stop
+Die Tests prüfen Positionswahl, Klicks und Stop
 nach der Positionswahl sowie reguläres App-Schließen.
 Zusätzlich laufen alle drei Maustasten mit Einzel-/Doppelklick; Optionen werden
 über sichtbare Auswahlknöpfe gewählt und als ausgewählt geprüft. Jeder neue Picker wird
