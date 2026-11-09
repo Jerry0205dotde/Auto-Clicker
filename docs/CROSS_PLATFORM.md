@@ -15,6 +15,22 @@ Dieses Dokument beschreibt, wie Klickmeister über KDE Plasma unter Wayland hina
 | macOS 13 und neuer | voller Funktionsumfang | natives Backend, Bedienungshilfen-Freigabe nötig |
 | Android, iOS | nicht vorgesehen | siehe unten |
 
+„Eingeschränkt“ steht nur dort, wo das System selbst die nötige Schnittstelle nicht anbietet. Was Klickmeister selbst beitragen kann, muss dort ebenfalls dem [Qualitätsmaßstab](#qualitätsmaßstab) genügen.
+
+## Qualitätsmaßstab
+
+Jede Plattform muss mindestens so gut sein wie Klickmeister heute unter Plasma, und sie soll sich wie eine native Anwendung des jeweiligen Systems anfühlen. Ein Backend gilt erst als fertig, wenn es alle folgenden Punkte erfüllt:
+
+- **Geschwindigkeit:** Der native Benchmark (`tests/native/benchmark.py` oder ein gleichwertiges Testziel auf der Plattform) erreicht bei fester Position und geplanten 500 Klicks/s mindestens die heutigen Plasma-Werte, also etwa 365 Einzelklicks bzw. 440 Klicks als Doppelklicks pro Sekunde, gemessen auf vergleichbarer Hardware. Bei Raten, die Plasma heute vollständig zustellt, geht auch dort kein Klick verloren, und Druck und Loslassen kommen immer paarweise an. Unter Plasma darf kein Umbau die gemessenen Werte verschlechtern; jeder Backend-PR enthält eine Messung vorher und nachher.
+- **Funktionsumfang:** Alle Punkte aus [Funktionen](../README.md#funktionen) und [Erste Schritte](../README.md#erste-schritte) funktionieren: alle Maustasten, Einzel- und Doppelklick, Mauszeiger und feste Position auf jedem Monitor, Positionsauswahl mit Pfeiltasten, Countdown, Wiederholungen, globales Kürzel für Start und Stopp, Einzelinstanz.
+- **Sicherheit und Transparenz:** Solange Klickmeister klicken darf, ist das sichtbar und mit einem Griff zu beenden, wie das KDE-Symbol „Fernsteuerung“. Wo das System selbst nichts anzeigt (Windows, X11, macOS), übernimmt das ein eigenes Symbol in der Taskleiste bzw. Menüleiste mit **Stoppen**. Klickmeister liest weiterhin keine Tastatureingaben außer dem eigenen Kürzel, keine Bildschirminhalte und sendet keine Daten.
+- **Nativ:** Aussehen, Dialoge, Tastenkürzel-Eingabe, Berechtigungsabfragen, Speicherorte, Installation und Updates folgen den Konventionen der Plattform (siehe [Oberfläche](#oberfläche) und [Pakete und CI](#pakete-und-ci)). Hell/Dunkel-Modus, Akzentfarbe, Skalierung und Bildschirmleser funktionieren wie bei anderen Anwendungen des Systems.
+- **Geprüft auf echter Hardware:** Neben der CI läuft auf jeder Plattform die Prüfliste aus [tests/native](../tests/native/README.md) sinngemäß auf einem echten Gerät, einschließlich mehrerer Monitore mit unterschiedlicher Skalierung.
+
+Wo die Plattform mehr erlaubt als das Portal, nutzt Klickmeister das. Windows, X11 und macOS erzeugen Klicks ohne D-Bus-Umweg und sollten die 500 Klicks/s deutlich näher erreichen. Unter Linux soll libei (siehe unten) auch Plasma selbst schneller machen.
+
+## Nicht vorgesehen
+
 Auf **Android** ginge es nur über einen `AccessibilityService` mit `dispatchGesture`: eine eigene Anwendung mit anderer Oberfläche, eigenem Berechtigungsmodell und strengen Play-Store-Regeln für solche Dienste. Auf **iOS** dürfen Apps grundsätzlich keine Eingaben in andere Apps erzeugen. Beides ist deshalb kein Ziel dieses Plans.
 
 Ein Wayland-Compositor, der weder RemoteDesktop noch `wlr-virtual-pointer` anbietet, lässt sich ohne seine Mitwirkung nicht steuern. Einen Weg über `/dev/uinput` schließt Klickmeister weiterhin aus: Er bräuchte Root-Rechte oder eine udev-Regel und umginge jede Freigabe durch den Desktop.
@@ -81,11 +97,21 @@ Dabei gilt:
 
 ## Oberfläche
 
-Qt/QML und Kirigami bleiben. Qt und Kirigami laufen auf Windows und macOS; ein Wechsel des Toolkits löst keines der Eingabe- oder Freigabeprobleme und würde QML-Tests, Barrierefreiheit und die Positionsauswahl neu erfordern.
+Qt/QML bleibt. Qt zeichnet unter Windows und macOS mit den nativen Stilen des Systems, ein Wechsel des Toolkits löst keines der Eingabe- oder Freigabeprobleme und würde QML-Tests, Barrierefreiheit und die Positionsauswahl neu erfordern. Für ein natives Aussehen hängt die Oberfläche aber nicht mehr überall an Kirigami:
 
-- `main.rs` wählt den Stil: `org.kde.desktop`, wenn `qqc2-desktop-style` vorhanden ist, sonst den nativen Stil der Plattform oder Fusion.
+| Plattform | Stil | Besonderheiten |
+| --- | --- | --- |
+| Plasma | `org.kde.desktop` mit Kirigami, wie heute | unverändert |
+| GNOME | Fusion mit Systempalette, Hell/Dunkel und Akzentfarbe über das Settings-Portal | Dialoge über die Portale, also im GNOME-Stil; `QGnomePlatform` und `adwaita-qt` werden nicht mehr gepflegt |
+| Windows 11 | `FluentWinUI3` (ab Qt 6.8), unter Windows 10 `Windows` | Mica/Akzentfarbe, Taskleisten-Symbol, Benachrichtigungen |
+| macOS | `macOS`-Stil von Qt | Menüleiste mit Einstellungen und Beenden (`Cmd+Q`), Menüleisten-Symbol |
+
+- Kirigami wird nur noch für `Units` und `Theme` verwendet. Dafür gibt es ein kleines eigenes QML-Singleton, das unter Plasma Kirigami-Werte und sonst `SystemPalette` und Schriftmetriken liefert. Damit entfällt Kirigami auf Windows und macOS, und die Oberfläche übernimmt Farben, Abstände und Schrift des Systems.
+- `main.rs` wählt den Stil passend zur Plattform; `org.kde.desktop` nur, wenn `qqc2-desktop-style` vorhanden ist.
 - `KWindowSystem` wird nur unter Linux gebaut und gelinkt, `build.rs` entscheidet anhand von `CARGO_CFG_TARGET_OS`. Der Fensterexport braucht eine Versionsprüfung, weil `exportToplevel` erst ab KDE Frameworks 6.28 existiert.
-- Symbole, die heute nur über `icon.name` aus dem Desktop-Thema kommen, werden als Ressourcen mitgeliefert.
+- Unter Plasma und GNOME stellt der Desktop den Dialog für das Tastenkürzel. Auf Windows, macOS, X11 und wlroots bietet Klickmeister einen eigenen Eingabedialog im Stil der Plattform, der Konflikte mit belegten Kombinationen sofort meldet.
+- Symbole kommen unter Linux weiterhin aus dem Desktop-Thema, auf Windows und macOS aus mitgelieferten Ressourcen im Stil der jeweiligen Plattform.
+- Texte nennen das jeweilige System statt pauschal „KDE“, etwa „Bedienungshilfen“ unter macOS.
 - `PositionPicker.qml` bleibt ein transparentes Vollbildfenster je Monitor und fordert weiterhin keine Bildschirmaufnahme an. Vollbild, Fokus und Transparenz sind auf macOS (Spaces) und unter Wayland-Compositoren ohne KDE einzeln zu prüfen.
 - Einstellungen liegen unter Windows in `%APPDATA%\Klickmeister`, unter macOS in `~/Library/Application Support/Klickmeister`, unter Linux unverändert in `~/.config`.
 
@@ -99,11 +125,11 @@ Unter Linux bleibt der D-Bus-Name. Unter Windows und macOS übernimmt ein gemein
 | --- | --- |
 | Flatpak (alle Distributionen) | KDE-Runtime, die Kirigami und `qqc2-desktop-style` schon enthält; Cargo-Abhängigkeiten über `flatpak-cargo-generator`; Portale funktionieren in der Sandbox unverändert; Veröffentlichung auf Flathub |
 | AppImage | optional; bündelt Qt, Kirigami und QML-Module, setzt aber Portale auf dem Wirt voraus |
-| Windows | MSVC-Build mit Qt aus `install-qt-action`, `windeployqt --qmldir qml`, zuerst ZIP, danach Installer (Inno Setup oder WiX) |
-| macOS | `.app` für arm64 und x86_64, `macdeployqt`, signiertes und notarisiertes `.dmg`; ohne Apple-Developer-Konto warnt Gatekeeper, und die Bedienungshilfen-Freigabe geht bei jeder unsignierten neuen Version verloren |
+| Windows | MSVC-Build mit Qt aus `install-qt-action`, `windeployqt --qmldir qml`; signiertes MSIX bzw. Installer, verteilt über `winget` und optional den Microsoft Store, damit Updates wie bei anderen Programmen laufen |
+| macOS | Universal-`.app` (arm64 und x86_64), `macdeployqt`, signiertes und notarisiertes `.dmg`, zusätzlich Homebrew-Cask; ohne Apple-Developer-Konto warnt Gatekeeper, und die Bedienungshilfen-Freigabe geht bei jeder unsignierten neuen Version verloren, deshalb ist die Signatur für „nativ“ Pflicht |
 | Arch/AUR | wie heute; `xdg-desktop-portal-kde` wird zur optionalen Abhängigkeit neben `xdg-desktop-portal-gnome` |
 
-In der CI kommen Matrix-Jobs für `windows-latest` und `macos-latest` hinzu (Build, Rust-Tests, QML-Smoke-Test), ein X11-Job unter Xvfb mit XTEST-Prüfung und ein Job mit headless Sway für das wlr-Backend. Die bestehenden Arch-Jobs, die Portaltests auf privatem D-Bus und der virtuelle KWin bleiben. Echte Freigabedialoge und gemischt skalierte Monitore bleiben manuelle Prüfungen auf dem jeweiligen System, wie heute unter [tests/native](../tests/native/README.md).
+In der CI kommen Matrix-Jobs für `windows-latest` und `macos-latest` hinzu (Build, Rust-Tests, QML-Smoke-Test), ein X11-Job unter Xvfb mit XTEST-Prüfung und ein Job mit headless Sway für das wlr-Backend. Auf dem Windows-Runner läuft zusätzlich der Benchmark gegen ein Testfenster, da GitHub dort eine echte Desktop-Sitzung bietet. Unter macOS lässt sich die Bedienungshilfen-Freigabe in der CI nicht erteilen; dort bleibt der Benchmark eine Prüfung auf einem echten Mac. Die bestehenden Arch-Jobs, die Portaltests auf privatem D-Bus und der virtuelle KWin bleiben. Echte Freigabedialoge und gemischt skalierte Monitore bleiben manuelle Prüfungen auf dem jeweiligen System, wie heute unter [tests/native](../tests/native/README.md).
 
 ## Reihenfolge
 
@@ -113,14 +139,14 @@ Jede Phase ist ein eigener PR oder eine kleine Reihe davon. Nach jeder Phase mus
 | --- | --- | ---: |
 | 1 | `InputBackend` einführen, Portal-Klicks dahinter, `evdev_code` ins Portal-Backend | 2–3 |
 | 2 | `ShortcutBackend` einführen, Portal-Kürzel samt Startbarriere dahinter, Startsperre an Fähigkeiten, `--toggle` | 3–5 |
-| 3 | portabler Build: Stilwahl, Symbole, Pfade, `build.rs` nach Zielsystem, Einzelinstanz-Abstraktion | 4–6 |
+| 3 | portabler Build: eigenes Theme-Singleton statt Kirigami, Stilwahl, Symbole, Pfade, `build.rs` nach Zielsystem, Einzelinstanz-Abstraktion | 5–8 |
 | 4 | GNOME prüfen und Texte von „KDE“ lösen, Flatpak | 4–6 |
 | 5 | X11-Backend | 3–5 |
-| 6 | Windows-Backend und erstes Windows-Paket | 6–9 |
-| 7 | macOS-Backend und erstes macOS-Paket | 7–11 |
+| 6 | Windows-Backend, Taskleisten-Symbol, Kürzel-Dialog, signiertes Paket | 8–12 |
+| 7 | macOS-Backend, Menüleiste, Bedienungshilfen-Abfrage, signiertes Paket | 9–13 |
 | 8 | wlroots/Hyprland über `wlr-virtual-pointer` | 5–8 |
-| 9 | optional: libei im Portal-Backend | 4–7 |
+| 9 | libei im Portal-Backend für mehr Geschwindigkeit unter Linux | 4–7 |
 
-Insgesamt etwa 38–60 Personentage, ohne Phase 9. Flatpak in Phase 4 bringt mit wenig Aufwand die meisten zusätzlichen Linux-Nutzer; Windows bringt die meisten Nutzer überhaupt, braucht aber die Vorarbeit aus den Phasen 1 bis 3.
+Insgesamt etwa 48–74 Personentage. libei ist keine Option mehr, sondern der Weg, auch unter Linux über die heutigen Werte hinauszukommen. Flatpak in Phase 4 bringt mit wenig Aufwand die meisten zusätzlichen Linux-Nutzer; Windows bringt die meisten Nutzer überhaupt, braucht aber die Vorarbeit aus den Phasen 1 bis 3.
 
-Der erste PR ist eine reine Verschiebung ohne Verhaltensänderung: `backend/input` mit genau den Operationen, die der Worker heute an `PortalClickSession` aufruft (`create`, `click`, `matches_monitor`, `is_closed`, `wait_closed`, `close`). Die vorhandenen Portaltests bleiben, dazu kommen Vertragstests mit einem simulierten Backend für Abbruch und Sitzungsverlust. Countdown, Stop, die 60 Sekunden bis zum Schließen der Freigabe und alle Fehlermeldungen bleiben gleich. Die Kürzel-Extraktion folgt getrennt, weil sie die empfindliche Startbarriere betrifft.
+Der erste PR ist eine reine Verschiebung ohne Verhaltensänderung: `backend/input` mit genau den Operationen, die der Worker heute an `PortalClickSession` aufruft (`create`, `click`, `matches_monitor`, `is_closed`, `wait_closed`, `close`). Die vorhandenen Portaltests bleiben, dazu kommen Vertragstests mit einem simulierten Backend für Abbruch und Sitzungsverlust. Countdown, Stop, die 60 Sekunden bis zum Schließen der Freigabe und alle Fehlermeldungen bleiben gleich, und der Benchmark auf dem Server zeigt vorher und nachher dieselben Klickraten. Die Kürzel-Extraktion folgt getrennt, weil sie die empfindliche Startbarriere betrifft.
