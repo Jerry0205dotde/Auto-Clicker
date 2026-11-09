@@ -55,7 +55,7 @@ Das Erzeugen eines Releases veröffentlicht die Paketbeschreibungen noch nicht i
 
 Klickmeister läuft pro Sitzung nur einmal. Ein weiterer Start, etwa durch einen Doppelklick im Anwendungsmenü, öffnet kein zweites Fenster, sondern holt das vorhandene in den Vordergrund. So erreicht jeder Druck auf das Tastenkürzel genau einen Klickmeister.
 
-Als Tastenkürzel wird `Pause` vorgeschlagen. Das aktive Kürzel steht in der Fußleiste; mit **Ändern …** lässt es sich im KDE-Dialog anpassen. Klickmeister startet erst, wenn ein Tastenkürzel für Start und Stopp eingerichtet ist.
+Als Tastenkürzel wird `Pause` vorgeschlagen. Das aktive Kürzel steht in der Fußleiste; mit **Ändern …** lässt es sich im KDE-Dialog anpassen. Ältere Portale ohne diesen Dialog (GlobalShortcuts Version 1) verweisen stattdessen auf die Systemeinstellungen unter „Kurzbefehle“. Klickmeister startet erst, wenn ein Tastenkürzel für Start und Stopp eingerichtet ist.
 
 ### Start an der Mauszeigerposition
 

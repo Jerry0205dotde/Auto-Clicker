@@ -1251,6 +1251,73 @@ async fn unbound_v1_hotkey_can_be_retried_without_configure_shortcuts() -> TestR
     result
 }
 
+/// Issue #132: GlobalShortcuts v1 has no ConfigureShortcuts. A bound v1
+/// hotkey is reported as not configurable, and a configure request keeps
+/// the binding and a pending hotkey start.
+#[tokio::test]
+#[ignore = "requires a private D-Bus session via dbus-run-session"]
+async fn bound_v1_hotkey_is_not_configured_and_keeps_its_start() -> TestResult {
+    let _serial = BUS_TEST_LOCK.lock().await;
+    let observed = Shared::default();
+    observed
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .hotkey_version = Some(1);
+    let service = fake_portal(&observed).await?;
+    let (tx, mut events) = mpsc::unbounded_channel();
+    let worker = WorkerHandle::spawn(move |event| {
+        let _ = tx.send(event);
+    });
+    let once = ClickSettings {
+        repeat: Some(1),
+        ..continuous()
+    };
+    let result: TestResult = async {
+        event(&mut events, |e| {
+            matches!(e, WorkerEvent::HotkeyConfigurable(false))
+        })
+        .await?;
+        event(&mut events, |e| {
+            matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Ready))
+        })
+        .await?;
+        let session = hotkey_session(&observed)?;
+        shortcut_signal(&service, &session, "Activated", 1).await?;
+        let request = start_request(&mut events).await?;
+        worker.send(Command::ConfigureHotkey)?;
+        request.start(once.clone());
+        // `event` fails on any error, such as a failed ConfigureShortcuts.
+        event(&mut events, |e| {
+            matches!(e, WorkerEvent::State(RunState::Stopped))
+        })
+        .await?;
+        // Queued behind ConfigureHotkey, so it has been handled by now.
+        worker.send(Command::Start(once))?;
+        event(&mut events, |e| {
+            matches!(e, WorkerEvent::State(RunState::Clicking))
+        })
+        .await?;
+        event(&mut events, |e| {
+            matches!(e, WorkerEvent::State(RunState::Stopped))
+        })
+        .await?;
+        ensure(presses(&observed) == 2, "both runs must click")?;
+        let state = observed.lock().unwrap_or_else(|e| e.into_inner());
+        ensure(
+            state.configure_calls == 0,
+            "v1 must never call ConfigureShortcuts",
+        )?;
+        ensure(
+            state.hotkey_created == 1,
+            "a bound v1 hotkey must keep its session",
+        )
+    }
+    .await;
+    tokio::task::spawn_blocking(move || worker.shutdown()).await?;
+    service.close().await?;
+    result
+}
+
 /// When the portal disappears relative to a run.
 #[derive(Clone, Copy, Debug)]
 enum PortalLoss {
