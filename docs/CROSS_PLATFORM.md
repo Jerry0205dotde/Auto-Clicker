@@ -91,6 +91,8 @@ Dabei gilt:
 
 **Portal und libei.** RemoteDesktop bietet mit `ConnectToEIS` einen Eingabekanal über libei (in Rust: `reis`). Klicks laufen dann nicht mehr als einzelne D-Bus-Aufrufe. Das kann den unter KWin 6.7.5 beobachteten Verlust von Klicks bei Druck und Loslassen ohne Zwischenantwort beheben und die erreichbare Klickrate erhöhen; beides ist zu messen. Nach dem Wechsel auf EIS darf dieselbe Sitzung keine `Notify*`-Aufrufe mehr senden.
 
+**Zeitbasis unter Windows.** Der Worker wartet heute mit `tokio::time::sleep_until`. Unter Windows ist dessen Auflösung ohne Weiteres zu grob für das 2- bzw. 4-ms-Raster, und `timeBeginPeriod` gilt unter Windows 11 für verdeckte oder minimierte Fenster nicht zuverlässig. Das Windows-Backend wartet deshalb auf einen hochauflösenden Waitable Timer (`CreateWaitableTimerExW` mit `CREATE_WAITABLE_TIMER_HIGH_RESOLUTION`), ohne Busy-Wait. Der Benchmark prüft die Mindestraten auch bei verdecktem und minimiertem Klickmeister-Fenster.
+
 **Feste Position ohne Metadaten.** Liefert ein Portal keine Position und Größe pro Stream, darf Klickmeister den Monitor nicht aus Reihenfolge oder Anzahl der Streams raten. Dann bleibt nur der Mauszeigermodus, und die Oberfläche sagt das.
 
 **`enigo`** deckt Klicks unter Windows, macOS und X11 ab und kann hinter `InputBackend` für einen schnellen Prototyp dienen. Kürzel, Monitorzuordnung und Fensterintegration löst es nicht, seine Wayland-Unterstützung ist experimentell. Die Backends sind dünn genug, um sie selbst zu schreiben.
@@ -109,7 +111,7 @@ Qt/QML bleibt. Qt zeichnet unter Windows und macOS mit den nativen Stilen des Sy
 - Die QML-Dateien verwenden heute `Kirigami.ApplicationWindow`, `ScrollablePage`, `InlineMessage`, `Separator`, `Units` und `Theme`. Fenster, Seite und Trennlinie ersetzen `ApplicationWindow`, `ScrollView` und `MenuSeparator` aus Qt Quick Controls, die Meldungen eine kleine eigene Komponente. `Units` und `Theme` liefert ein eigenes QML-Singleton, unter Plasma aus Kirigami, sonst aus `SystemPalette` und den Schriftmetriken. Damit entfällt Kirigami auf Windows und macOS, und die Oberfläche übernimmt Farben, Abstände und Schrift des Systems. Unter Plasma bleibt das Aussehen wie heute; das prüfen die vorhandenen QML-Tests und ein Screenshot-Vergleich.
 - `main.rs` wählt den Stil passend zur Plattform; `org.kde.desktop` nur, wenn `qqc2-desktop-style` vorhanden ist.
 - `KWindowSystem` wird nur unter Linux gebaut und gelinkt, `build.rs` entscheidet anhand von `CARGO_CFG_TARGET_OS`. Der Fensterexport braucht eine Versionsprüfung, weil `exportToplevel` erst ab KDE Frameworks 6.28 existiert.
-- Unter Plasma und GNOME stellt der Desktop den Dialog für das Tastenkürzel. Auf Windows, macOS, X11 und wlroots bietet Klickmeister einen eigenen Eingabedialog im Stil der Plattform, der Konflikte mit belegten Kombinationen sofort meldet.
+- Unter Plasma und GNOME stellt der Desktop den Dialog für das Tastenkürzel. Auf Windows, macOS und X11 bietet Klickmeister einen eigenen Eingabedialog im Stil der Plattform, der Konflikte mit belegten Kombinationen sofort meldet. Unter Sway und Hyprland legt die Compositor-Konfiguration die Taste fest; Klickmeister zeigt dort die passende Konfigurationszeile zum Kopieren und erkennt, ob das Kürzel ankommt.
 - Symbole kommen unter Linux weiterhin aus dem Desktop-Thema, auf Windows und macOS aus mitgelieferten Ressourcen im Stil der jeweiligen Plattform.
 - Texte nennen das jeweilige System statt pauschal „KDE“, etwa „Bedienungshilfen“ unter macOS.
 - `PositionPicker.qml` bleibt ein transparentes Vollbildfenster je Monitor und fordert weiterhin keine Bildschirmaufnahme an. Vollbild, Fokus und Transparenz sind auf macOS (Spaces) und unter Wayland-Compositoren ohne KDE einzeln zu prüfen.
@@ -142,11 +144,11 @@ Jede Phase ist ein eigener PR oder eine kleine Reihe davon. Nach jeder Phase mus
 | 3 | portabler Build: eigenes Theme-Singleton statt Kirigami, Stilwahl, Symbole, Pfade, `build.rs` nach Zielsystem, Einzelinstanz-Abstraktion | 5–8 |
 | 4 | GNOME prüfen und Texte von „KDE“ lösen, Flatpak | 4–6 |
 | 5 | X11-Backend | 3–5 |
-| 6 | Windows-Backend, Taskleisten-Symbol, Kürzel-Dialog, signiertes Paket | 8–12 |
+| 6 | Windows-Backend mit hochauflösender Zeitbasis, Taskleisten-Symbol, Kürzel-Dialog, signiertes Paket | 8–12 |
 | 7 | macOS-Backend, Menüleiste, Bedienungshilfen-Abfrage, signiertes Paket | 9–13 |
 | 8 | wlroots/Hyprland über `wlr-virtual-pointer` | 5–8 |
 | 9 | libei im Portal-Backend für mehr Geschwindigkeit unter Linux | 4–7 |
 
-Insgesamt etwa 48–74 Personentage. libei ist keine Option mehr, sondern der Weg, auch unter Linux über die heutigen Werte hinauszukommen. Flatpak in Phase 4 bringt mit wenig Aufwand die meisten zusätzlichen Linux-Nutzer; Windows bringt die meisten Nutzer überhaupt, braucht aber die Vorarbeit aus den Phasen 1 bis 3.
+Insgesamt etwa 43–67 Personentage. libei ist keine Option mehr, sondern der Weg, auch unter Linux über die heutigen Werte hinauszukommen. Flatpak in Phase 4 bringt mit wenig Aufwand die meisten zusätzlichen Linux-Nutzer; Windows bringt die meisten Nutzer überhaupt, braucht aber die Vorarbeit aus den Phasen 1 bis 3.
 
 Der erste PR ist eine reine Verschiebung ohne Verhaltensänderung: `backend/input` mit genau den Operationen, die der Worker heute an `PortalClickSession` aufruft (`create`, `click`, `matches_monitor`, `is_closed`, `wait_closed`, `close`). Die vorhandenen Portaltests bleiben, dazu kommen Vertragstests mit einem simulierten Backend für Abbruch und Sitzungsverlust. Countdown, Stop, die 60 Sekunden bis zum Schließen der Freigabe und alle Fehlermeldungen bleiben gleich, und der Benchmark auf dem Server zeigt vorher und nachher dieselben Klickraten. Die Kürzel-Extraktion folgt getrennt, weil sie die empfindliche Startbarriere betrifft.
