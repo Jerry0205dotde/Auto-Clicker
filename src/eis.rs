@@ -254,6 +254,12 @@ impl EisInput {
                 _ => {}
             },
             ei::Event::Callback(callback, ei::callback::Event::Done { .. }) => {
+                // `done` destroys the callback, but reis keeps it registered;
+                // one per cycle would pile up for the session's lifetime.
+                let object = callback.as_object();
+                if let Some(backend) = object.backend() {
+                    backend.remove_id(object.id());
+                }
                 if self.pending_sync.as_ref() == Some(&callback) {
                     self.pending_sync = None;
                 }
@@ -336,7 +342,13 @@ impl EisInput {
                     .interfaces
                     .insert(object.interface().to_owned(), object);
             }
-            ei::device::Event::Done => state.done = true,
+            ei::device::Event::Done => {
+                state.done = true;
+                // Version 3 devices wait for this before the compositor resumes them.
+                if device.version() >= 3 {
+                    device.ready();
+                }
+            }
             ei::device::Event::Resumed { serial } => {
                 self.serial = serial;
                 state.resumed = true;
