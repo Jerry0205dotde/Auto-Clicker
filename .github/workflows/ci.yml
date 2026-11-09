@@ -51,11 +51,10 @@ jobs:
       - name: Check Rust lints
         run: cargo clippy --locked --all-targets -- -D warnings
 
-      - name: Run Rust tests
-        run: cargo test --locked --all-targets
-
-      - name: Run portal tests on a private session bus
-        run: dbus-run-session -- cargo test --locked --all-targets -- --ignored
+      # One run on a private session bus: a second cargo test under
+      # dbus-run-session rebuilt the crate for the ignored portal tests.
+      - name: Run Rust and portal tests on a private session bus
+        run: dbus-run-session -- cargo test --locked --all-targets -- --include-ignored
 
       - name: Run QML tests with the KDE style
         run: >-

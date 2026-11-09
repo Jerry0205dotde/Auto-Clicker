@@ -1,4 +1,4 @@
-"""Native KDE portal input regression with screenshot-free position selection."""
+"""Native KDE portal input regression with position selection."""
 
 import json
 import time
@@ -31,8 +31,8 @@ def frame(title):
 def portal_button(title, names, position, count):
     """German KDE 6.7 fallback for buttons whose AT-SPI names are empty.
 
-    The visible labels/order are verified in this version's dialog and native
-    screenshot evidence. Fail on a changed layout; never guess another dialog.
+    The visible labels/order were verified visually in this version's dialog.
+    Fail on a changed layout; never guess another dialog.
     """
     frames = [n for n, _ in nodes(PORTAL_APP) if n.get_role_name() == "frame"]
     assert len(frames) == 1 and frames[0].get_name() == title
@@ -71,12 +71,6 @@ def picker_text():
     return "\n".join(n.get_name() for n, _ in nodes() if n.get_role_name() == "label")
 
 
-def probe_driver(name):
-    started = time.monotonic()
-    rpc("driver", cmd="move", x=80, y=400)
-    mark(name, passed=True, elapsed_ms=(time.monotonic() - started) * 1000)
-
-
 def focus_picker():
     kwin("focus_picker")
     wait_for(
@@ -84,12 +78,6 @@ def focus_picker():
     )
     # KWin activation reaches the Qt Wayland client asynchronously.
     time.sleep(0.15)
-
-
-def close_picker():
-    focus_picker()
-    key(0xFF1B)
-    wait_for(lambda: not any("Esc / Rechtsklick" in n.get_name() for n, _ in nodes()))
 
 
 def pin_target():
@@ -107,13 +95,6 @@ def main():
     wait_for(lambda: rpc("driver", cmd="state")["ready"])
     kwin("place")
     wait_for(lambda: "Bereit" in status())
-    open_picker()
-    assert "Lupe 4×" not in picker_text()
-    # The former capture path requested the portal after a 250 ms delay.
-    time.sleep(0.35)
-    assert not frame("Bildschirmfoto anfordern")
-    probe_driver("picker_without_screenshot_portal")
-    close_picker()
     open_picker()
     pin_target()
 

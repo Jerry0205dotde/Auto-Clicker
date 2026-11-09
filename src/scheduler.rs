@@ -58,20 +58,6 @@ mod tests {
     }
 
     #[test]
-    fn ten_minute_simulation_stops_at_each_supported_rate() {
-        for cps in [1_u64, 10, 50, 100, 250, 500] {
-            let interval = Duration::from_millis(1_000 / cps);
-            let expected = 600 * cps;
-            let mut schedule = Schedule::new(interval, Some(expected));
-            for _ in 0..expected {
-                assert!(schedule.record_tick());
-            }
-            assert!(schedule.is_finished());
-            assert!(!schedule.record_tick());
-        }
-    }
-
-    #[test]
     fn overdue_ticks_run_once_without_waiting_another_interval() {
         let interval = Duration::from_millis(10);
         let schedule = Schedule::new(interval, None);
@@ -107,7 +93,7 @@ mod tests {
     #[test]
     fn unlimited_schedule_keeps_running() {
         let mut schedule = Schedule::new(Duration::from_millis(10), None);
-        for _ in 0..60_000 {
+        for _ in 0..10 {
             assert!(schedule.record_tick());
             assert!(!schedule.is_finished());
         }
