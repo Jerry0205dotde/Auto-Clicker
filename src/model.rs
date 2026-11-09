@@ -19,16 +19,6 @@ pub enum MouseButton {
     Middle,
 }
 
-impl MouseButton {
-    pub const fn evdev_code(self) -> i32 {
-        match self {
-            Self::Left => 0x110,
-            Self::Right => 0x111,
-            Self::Middle => 0x112,
-        }
-    }
-}
-
 /// Index of the button in the UI and its controller property.
 impl From<MouseButton> for i32 {
     fn from(button: MouseButton) -> Self {
@@ -291,13 +281,6 @@ mod tests {
             settings.validate(),
             Err(ValidationError::InvalidMonitorPosition)
         );
-    }
-
-    #[test]
-    fn maps_only_supported_mouse_buttons() {
-        assert_eq!(MouseButton::Left.evdev_code(), 0x110);
-        assert_eq!(MouseButton::Right.evdev_code(), 0x111);
-        assert_eq!(MouseButton::Middle.evdev_code(), 0x112);
     }
 
     #[test]

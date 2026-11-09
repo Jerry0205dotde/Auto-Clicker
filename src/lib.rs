@@ -1,5 +1,6 @@
 pub mod config;
 pub mod controller;
+pub mod input;
 pub mod instance;
 pub mod model;
 pub mod parent_window;
