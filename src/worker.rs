@@ -41,7 +41,7 @@ use tokio::{
 use crate::{
     model::{ClickSettings, ValidationError},
     parent_window,
-    portal::{PortalClickSession, register_connection, watch_portal_owner},
+    portal::{PortalClickSession, PortalError, register_connection, watch_portal_owner},
     scheduler::Schedule,
     state::{RunState, StateMachine},
 };
@@ -55,6 +55,12 @@ const SHUTDOWN_WAIT: Duration = Duration::from_secs(5);
 const HOTKEY_ID: &str = "toggle-clicking";
 const HOTKEY_SESSION_CLOSED: &str =
     "Die Freigabe für das Tastenkürzel wurde beendet. Wähle „Erneut versuchen“.";
+const HOTKEY_REQUEST_CANCELLED: &str = "Die Freigabe für das Tastenkürzel wurde abgebrochen.";
+const HOTKEY_SESSION_MISSING: &str =
+    "Die Freigabe für das Tastenkürzel fehlt. Wähle „Erneut versuchen“.";
+const HOTKEY_UNBOUND: &str =
+    "Kein Tastenkürzel für Start und Stopp eingerichtet. Wähle unter „Tastenkürzel“ eine Taste.";
+const HOTKEY_REGISTERING: &str = "Tastenkürzel wird eingerichtet …";
 const BUTTON_START_DELAY_SECS: u8 = 3;
 /// How long the mouse permission outlives a run. A start within this time
 /// needs no new KDE dialog; afterwards KDE's remote control indicator and any
@@ -256,8 +262,9 @@ impl WorkerHandle {
     pub fn shutdown(self) {
         if !self.shutdown_within(SHUTDOWN_WAIT) {
             eprintln!(
-                "Klicken beendet. Das Schließen der Freigaben dauert länger als 5 s \
-                 und wird im Hintergrund fortgesetzt."
+                "Klicken beendet. Das Schließen der Freigaben dauert länger als {} s \
+                 und wird im Hintergrund fortgesetzt.",
+                SHUTDOWN_WAIT.as_secs()
             );
         }
     }
@@ -297,6 +304,10 @@ fn worker_start_failed(error: &dyn fmt::Display) -> WorkerEvent {
     WorkerEvent::Error(format!(
         "Die Klicksteuerung konnte nicht gestartet werden: {error}"
     ))
+}
+
+fn hotkey_settings_error(error: impl fmt::Display) -> String {
+    format!("Die Einstellungen für das Tastenkürzel konnten nicht geöffnet werden: {error}")
 }
 
 fn block_on_runtime(
@@ -497,7 +508,7 @@ async fn while_hotkey_open<T>(
 async fn setup_hotkey(mut cancel: oneshot::Receiver<()>) -> Result<HotkeyRegistration, String> {
     let connection = tokio::select! {
         biased;
-        _ = &mut cancel => return Err("Die Freigabe für das Tastenkürzel wurde abgebrochen.".to_owned()),
+        _ = &mut cancel => return Err(HOTKEY_REQUEST_CANCELLED.to_owned()),
         result = ashpd::zbus::Connection::session() => result.map_err(|error| format!("Das Tastenkürzel konnte nicht eingerichtet werden: {error}"))?,
     };
     let mut session = None;
@@ -522,9 +533,7 @@ async fn setup_hotkey(mut cancel: oneshot::Receiver<()>) -> Result<HotkeyRegistr
         session = Some(Arc::new(created.map_err(|error| {
             format!("Das Tastenkürzel konnte nicht eingerichtet werden: {error}")
         })?));
-        let owned_session = session
-            .as_ref()
-            .ok_or("Die Freigabe für das Tastenkürzel fehlt. Wähle „Erneut versuchen“.")?;
+        let owned_session = session.as_ref().ok_or(HOTKEY_SESSION_MISSING)?;
         let watched_session = Arc::clone(owned_session);
         let (ready_tx, ready_rx) = oneshot::channel();
         let mut closed: HotkeyClosedWatcher = Box::pin(
@@ -580,10 +589,10 @@ async fn setup_hotkey(mut cancel: oneshot::Receiver<()>) -> Result<HotkeyRegistr
                 .response()
                 .map_err(|error| format!("Das Tastenkürzel wurde nicht freigegeben: {error}"))?;
             let shortcut = response
-            .shortcuts()
-            .iter()
-            .find(|shortcut| shortcut.id() == HOTKEY_ID)
-            .ok_or_else(|| "Kein Tastenkürzel für Start und Stopp eingerichtet. Wähle unter „Tastenkürzel“ eine Taste.".to_owned())?;
+                .shortcuts()
+                .iter()
+                .find(|shortcut| shortcut.id() == HOTKEY_ID)
+                .ok_or_else(|| HOTKEY_UNBOUND.to_owned())?;
             let actual = (!shortcut.trigger_description().trim().is_empty())
                 .then(|| shortcut.trigger_description().to_owned());
             Ok(actual)
@@ -604,7 +613,7 @@ async fn setup_hotkey(mut cancel: oneshot::Receiver<()>) -> Result<HotkeyRegistr
     };
     let result = tokio::select! {
         biased;
-        _ = &mut cancel => Err("Die Freigabe für das Tastenkürzel wurde abgebrochen.".to_owned()),
+        _ = &mut cancel => Err(HOTKEY_REQUEST_CANCELLED.to_owned()),
         result = operation => result,
     };
     match result {
@@ -615,8 +624,7 @@ async fn setup_hotkey(mut cancel: oneshot::Receiver<()>) -> Result<HotkeyRegistr
             closed,
             signals,
             actual,
-            session: session
-                .ok_or("Die Freigabe für das Tastenkürzel fehlt. Wähle „Erneut versuchen“.")?,
+            session: session.ok_or(HOTKEY_SESSION_MISSING)?,
         }),
         Err(error) => {
             if let Some(session) = session {
@@ -721,10 +729,7 @@ async fn discard_closed_click_session(
     }
     if was_running {
         fail_run(machine, emit);
-        (emit)(WorkerEvent::Error(
-            "Die Freigabe für die Maussteuerung wurde beendet. Starte erneut, um sie anzufordern."
-                .to_owned(),
-        ));
+        (emit)(WorkerEvent::Error(PortalError::SessionClosed.to_string()));
     } else {
         (emit)(WorkerEvent::Status(
             "Freigabe erneut erforderlich".to_owned(),
@@ -846,9 +851,7 @@ async fn run_worker(
     let mut hotkey_bound = false;
 
     (emit)(WorkerEvent::State(machine.state()));
-    (emit)(WorkerEvent::Status(
-        "Tastenkürzel wird eingerichtet …".to_owned(),
-    ));
+    (emit)(WorkerEvent::Status(HOTKEY_REGISTERING.to_owned()));
     (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Registering));
     let mut ended_runs = machine.ended_runs();
     let mut barrier_stops = control.borrow().stops;
@@ -1013,14 +1016,14 @@ async fn run_worker(
                                         ConfigureShortcutsOptions::default(),
                                     )
                                     .await
-                                    .map_err(|error| format!("Die Einstellungen für das Tastenkürzel konnten nicht geöffnet werden: {error}"))
+                                    .map_err(hotkey_settings_error)
                             }));
                         } else {
                             let (tx, rx) = oneshot::channel();
                             hotkey_cancel = Some(tx);
                             hotkey_task = Some(tokio::spawn(setup_hotkey(rx)));
                             (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Registering));
-                            (emit)(WorkerEvent::Status("Tastenkürzel wird eingerichtet …".to_owned()));
+                            (emit)(WorkerEvent::Status(HOTKEY_REGISTERING.to_owned()));
                         }
                     }
                 }
@@ -1033,7 +1036,7 @@ async fn run_worker(
                         if session.is_closed() {
                             session.close().await;
                             fail_run(&mut machine, &emit);
-                            (emit)(WorkerEvent::Error("Die Freigabe für die Maussteuerung wurde beendet. Starte erneut, um sie anzufordern.".to_owned()));
+                            (emit)(WorkerEvent::Error(PortalError::SessionClosed.to_string()));
                         } else {
                             click_session = Some(session);
                             begin_run(&mut machine, &mut active, &mut countdown, settings, delay, &emit);
@@ -1083,7 +1086,7 @@ async fn run_worker(
                         } else {
                             hotkey_bound = false;
                             (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable));
-                            (emit)(WorkerEvent::Error("Kein Tastenkürzel für Start und Stopp eingerichtet. Wähle unter „Tastenkürzel“ eine Taste.".to_owned()));
+                            (emit)(WorkerEvent::Error(HOTKEY_UNBOUND.to_owned()));
                         }
                     }
                     Ok(Err(error)) => {
@@ -1118,7 +1121,7 @@ async fn run_worker(
                     Err(error) if !error.is_cancelled() => {
                         cancel_start(&mut start_task, &mut start_cancel).await;
                         abort_run(&mut machine, &mut active, &mut countdown, &emit);
-                        (emit)(WorkerEvent::Error(format!("Die Einstellungen für das Tastenkürzel konnten nicht geöffnet werden: {error}")));
+                        (emit)(WorkerEvent::Error(hotkey_settings_error(error)));
                     }
                     Err(_) => {}
                 }
@@ -1173,7 +1176,7 @@ async fn run_worker(
                         if let Some(task) = configure_task.take() { task.abort(); }
                         hotkey_bound = false;
                         (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable));
-                        (emit)(WorkerEvent::Error("Die Freigabe für das Tastenkürzel wurde beendet. Wähle „Erneut versuchen“.".to_owned()));
+                        (emit)(WorkerEvent::Error(HOTKEY_SESSION_CLOSED.to_owned()));
                         if let Some(state) = hotkey.take() {
                             let _ = timeout(PORTAL_CLOSE_TIMEOUT, state.connection.close()).await;
                         }

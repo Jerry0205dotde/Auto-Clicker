@@ -248,11 +248,18 @@ impl AppControllerRust {
         }
     }
 
-    /// A draft needs valid values but does not need an approved monitor yet.
-    fn config_snapshot(&self) -> Result<AppConfig, String> {
+    /// Convert the button, click type and interval shared by drafts and runs.
+    fn click_controls(&self) -> Result<(MouseButton, ClickType, u64), String> {
+        let button = MouseButton::try_from(self.mouse_button).map_err(|error| error.to_string())?;
         let click_type = ClickType::try_from(self.click_type).map_err(|error| error.to_string())?;
         let interval_ms = u64::try_from(self.interval_ms)
             .map_err(|_| "Wähle ein Klickintervall größer als 0 ms.".to_owned())?;
+        Ok((button, click_type, interval_ms))
+    }
+
+    /// A draft needs valid values but does not need an approved monitor yet.
+    fn config_snapshot(&self) -> Result<AppConfig, String> {
+        let (mouse_button, click_type, interval_ms) = self.click_controls()?;
         validate_interval(interval_ms, click_type).map_err(|error| error.to_string())?;
         let repeat_count = match u64::try_from(self.repeat_count) {
             Ok(count) if (1..=MAX_REPEAT_COUNT).contains(&count) => count,
@@ -274,8 +281,6 @@ impl AppControllerRust {
         } else {
             return Err("Die Koordinaten sind ungültig. Wähle eine neue Position.".to_owned());
         };
-        let mouse_button =
-            MouseButton::try_from(self.mouse_button).map_err(|error| error.to_string())?;
         Ok(AppConfig {
             interval_ms,
             mouse_button,
@@ -375,6 +380,7 @@ impl AppControllerRust {
     }
 
     fn persist_config(&mut self, force: bool) -> Result<(), String> {
+        // Without a usable HOME, closing with unchanged settings must not fail.
         if !force && !self.config_dirty {
             return Ok(());
         }
@@ -471,7 +477,6 @@ impl qobject::AppController {
         Some(settings)
     }
 
-    /// Stop a run or an outstanding start request.
     pub fn stop(mut self: Pin<&mut Self>) {
         self.as_mut().send_command(Command::Stop);
     }
@@ -487,7 +492,6 @@ impl qobject::AppController {
         self.as_mut().send_command(Command::ConfigureHotkey);
     }
 
-    /// Dismiss the current user-visible error message.
     pub fn clear_error(mut self: Pin<&mut Self>) {
         self.as_mut().set_error_message(QString::default());
     }
@@ -589,12 +593,7 @@ impl qobject::AppController {
                 "Prüfe Bildschirm und Koordinaten und bestätige die feste Position.".to_owned(),
             );
         }
-        let button =
-            MouseButton::try_from(*self.mouse_button()).map_err(|error| error.to_string())?;
-        let click_type =
-            ClickType::try_from(*self.click_type()).map_err(|error| error.to_string())?;
-        let interval_ms = u64::try_from(*self.interval_ms())
-            .map_err(|_| "Wähle ein Klickintervall größer als 0 ms.".to_owned())?;
+        let (button, click_type, interval_ms) = self.rust().click_controls()?;
         let repeat = if *self.repeat_until_stopped() {
             None
         } else {

@@ -4,9 +4,8 @@ use thiserror::Error;
 
 /// Highest rate of single clicks (press/release pairs), for every click type.
 pub const MAX_CLICKS_PER_SECOND: u64 = 500;
-/// Shortest interval of any click type: single clicks at the maximum rate.
-pub const MIN_INTERVAL_MS: u64 = ClickType::Single.min_interval_ms();
-pub const MAX_INTERVAL_MS: u64 = 86_400_000;
+const MAX_INTERVAL_HOURS: u64 = 24;
+pub const MAX_INTERVAL_MS: u64 = MAX_INTERVAL_HOURS * 60 * 60 * 1_000;
 pub const MAX_REPEAT_COUNT: u64 = 10_000_000;
 /// Largest fixed-position coordinate on either axis.
 pub const MAX_COORDINATE: u32 = 100_000;
@@ -137,7 +136,7 @@ pub enum ValidationError {
         "Wähle ein Klickintervall von mindestens {min_interval_ms} ms (höchstens {MAX_CLICKS_PER_SECOND} Klicks/s)."
     )]
     IntervalTooShort { min_interval_ms: u64 },
-    #[error("Wähle ein Klickintervall von höchstens 24 Stunden.")]
+    #[error("Wähle ein Klickintervall von höchstens {MAX_INTERVAL_HOURS} Stunden.")]
     IntervalTooLong,
     #[error("Wähle zwischen 1 und {MAX_REPEAT_COUNT} Klickzyklen.")]
     InvalidRepeat,
@@ -182,13 +181,11 @@ impl ClickSettings {
         Ok(())
     }
 
-    /// Return the configured delay as a scheduler duration.
     pub const fn interval(&self) -> Duration {
         Duration::from_millis(self.interval_ms)
     }
 }
 
-/// Enforce the supported interval range and maximum click rate.
 pub fn validate_interval(interval_ms: u64, click_type: ClickType) -> Result<(), ValidationError> {
     let min_interval_ms = click_type.min_interval_ms();
     if interval_ms < min_interval_ms {
@@ -234,10 +231,13 @@ mod tests {
                 Err(ValidationError::IntervalTooLong)
             );
         }
-        assert_eq!(MIN_INTERVAL_MS, 2);
         assert_eq!(
             ValidationError::IntervalTooShort { min_interval_ms: 4 }.to_string(),
             "Wähle ein Klickintervall von mindestens 4 ms (höchstens 500 Klicks/s)."
+        );
+        assert_eq!(
+            ValidationError::IntervalTooLong.to_string(),
+            "Wähle ein Klickintervall von höchstens 24 Stunden."
         );
     }
 
