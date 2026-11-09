@@ -20,7 +20,7 @@ from portal_cases import PORTAL_APP, frame, grant_remote
 from scenarios import choose, fixed_point, focus_app, focus_target, key, kwin, status
 
 PIDS = json.loads((BASE / "pids.json").read_text())
-HOTKEY = 0xFF13  # Pause, as written by run.py
+HOTKEY = 0xFF13  # Pause, the suggested key; main() checks that it is bound
 TICKS = os.sysconf("SC_CLK_TCK")
 TARGET_REPAINT = {
     "limited": "Neuzeichnen höchstens alle 100 ms (--target-repaint limited)",
@@ -44,6 +44,16 @@ class EventTail:
             e for e in map(json.loads, filter(None, lines)) if "button" in e
         ]
         return self.events
+
+
+def bound_hotkey():
+    """The hotkey as the portal bound it, read from the footer label."""
+    prefix = "Tastenkürzel: "
+    name = next(
+        (n.get_name() for n, _ in nodes() if (n.get_name() or "").startswith(prefix)),
+        prefix,
+    )
+    return name.removeprefix(prefix)
 
 
 class Gui:
@@ -366,6 +376,13 @@ def main():
     wait_for(lambda: rpc("driver", cmd="state")["ready"], timeout=30)
     kwin("place")
     assert fixed_point() == (80, 400), "run.py writes a fixed position at (80, 400)"
+    # The portal may bind another key than the suggested Pause. Pressing
+    # Pause then never starts a run, so fail before the first measurement.
+    hotkey = bound_hotkey()
+    assert not args.stop_repeats or hotkey == "Pause", (
+        "The hotkey stop measurements press Pause, but the bound hotkey is "
+        f"{hotkey!r}. Change it to Pause or pass --stop-repeats 0."
+    )
     env = environment()
     mark("benchmark_environment", **env)
     gui = Gui()

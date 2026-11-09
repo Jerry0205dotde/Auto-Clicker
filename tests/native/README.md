@@ -103,7 +103,9 @@ einzelne Klicks/s vor; Doppelklicks laufen dann mit dem doppelten Intervall, bei
 500 Klicks/s also 2 ms (1×) und 4 ms (2×). Intervalle unter der Grenze der App
 (2 ms bzw. 4 ms) werden abgelehnt. Anschließend wird je dreimal per Schaltfläche und
 per Tastenkürzel nach 1 s Klicken gestoppt; danach dürfen 1 s lang (`--quiet`)
-keine Ereignisse mehr ankommen.
+keine Ereignisse mehr ankommen. Die Tastenkürzel-Messung drückt `Pause`. Ist ein
+anderes Kürzel gebunden, bricht der Benchmark vor der ersten Messung ab; dann
+das Kürzel auf `Pause` ändern oder mit `--stop-repeats 0` messen.
 
 Jeder Lauf prüft Anzahl, Taste, Koordinaten (80, 400) und vollständige
 Press-/Release-Paare; `MouseButtonDblClick` zählt als Beginn eines Klicks.
