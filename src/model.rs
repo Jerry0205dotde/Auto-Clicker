@@ -4,8 +4,6 @@ use thiserror::Error;
 
 /// Highest rate of single clicks (press/release pairs), for every click type.
 pub const MAX_CLICKS_PER_SECOND: u64 = 500;
-/// Shortest interval of any click type: single clicks at the maximum rate.
-pub const MIN_INTERVAL_MS: u64 = ClickType::Single.min_interval_ms();
 pub const MAX_INTERVAL_MS: u64 = 86_400_000;
 pub const MAX_REPEAT_COUNT: u64 = 10_000_000;
 /// Largest fixed-position coordinate on either axis.
@@ -234,7 +232,6 @@ mod tests {
                 Err(ValidationError::IntervalTooLong)
             );
         }
-        assert_eq!(MIN_INTERVAL_MS, 2);
         assert_eq!(
             ValidationError::IntervalTooShort { min_interval_ms: 4 }.to_string(),
             "Wähle ein Klickintervall von mindestens 4 ms (höchstens 500 Klicks/s)."
