@@ -88,6 +88,8 @@ pub enum WorkerEvent {
     Countdown(u8),
     Hotkey(String),
     HotkeyPhase(HotkeyPhase),
+    /// Whether the portal can change a bound hotkey (GlobalShortcuts v2).
+    HotkeyConfigurable(bool),
     /// Reserved hotkey start: return current Qt settings, or drop to decline.
     StartRequested(StartRequest),
     Error(String),
@@ -992,14 +994,18 @@ async fn run_worker(
                         if configure_task.is_some() || hotkey_task.is_some() {
                             continue;
                         }
+                        // ConfigureShortcuts requires v2. On v1 only the system settings
+                        // can change a bound hotkey, and the GUI points there, so keep
+                        // the binding and a pending start. An unbound v1 session can
+                        // only recover through a fresh BindShortcuts.
+                        let v1 = hotkey.as_ref().is_some_and(|state| state.portal.version() < 2);
+                        if hotkey_bound && v1 {
+                            continue;
+                        }
                         if start_request.take().is_some() {
                             stop_run(&mut machine, &mut active, &mut countdown, &emit);
                         }
-                        // ConfigureShortcuts requires v2. On v1 an unbound
-                        // session can only recover through a fresh BindShortcuts.
-                        if !hotkey_bound && hotkey.as_ref().is_some_and(|state| state.portal.version() < 2)
-                            && let Some(state) = hotkey.take()
-                        {
+                        if v1 && let Some(state) = hotkey.take() {
                             let _ = timeout(PORTAL_CLOSE_TIMEOUT, state.session.close()).await;
                             let _ = timeout(PORTAL_CLOSE_TIMEOUT, state.connection.close()).await;
                         }
@@ -1068,6 +1074,7 @@ async fn run_worker(
                             }
                         }
                         let events = futures_util::stream::select(signals, futures_util::stream::once(closed));
+                        (emit)(WorkerEvent::HotkeyConfigurable(portal.version() >= 2));
                         hotkey = Some(HotkeyState {
                             connection,
                             portal: Arc::new(portal),

@@ -55,7 +55,7 @@ Das Erzeugen eines Releases veröffentlicht die Paketbeschreibungen noch nicht i
 
 Klickmeister läuft pro Sitzung nur einmal. Ein weiterer Start, etwa durch einen Doppelklick im Anwendungsmenü, öffnet kein zweites Fenster, sondern holt das vorhandene in den Vordergrund. So erreicht jeder Druck auf das Tastenkürzel genau einen Klickmeister.
 
-Als Tastenkürzel wird `Pause` vorgeschlagen. Das aktive Kürzel steht in der Fußleiste; mit **Ändern …** lässt es sich im KDE-Dialog anpassen. Klickmeister startet erst, wenn ein Tastenkürzel für Start und Stopp eingerichtet ist.
+Als Tastenkürzel wird `Pause` vorgeschlagen. Das aktive Kürzel steht in der Fußleiste; mit **Ändern …** lässt es sich im KDE-Dialog anpassen. Ältere Portale ohne diesen Dialog (GlobalShortcuts Version 1) verweisen stattdessen auf die Systemeinstellungen unter „Kurzbefehle“. Klickmeister startet erst, wenn ein Tastenkürzel für Start und Stopp eingerichtet ist.
 
 ### Start an der Mauszeigerposition
 
@@ -168,11 +168,12 @@ sudo ln -sf "$PWD/target/release/klickmeister" /usr/local/bin/klickmeister
 install -Dm644 packaging/io.github.jerry0205.klickmeister.desktop -t ~/.local/share/applications/
 ```
 
-Oder eine lokale Datei mit absolutem `Exec` verwenden:
+Oder eine lokale Datei mit absolutem `Exec` verwenden. Der Pfad steht dort in Anführungszeichen, damit auch Leerzeichen, `&` oder `|` im Checkout-Pfad funktionieren; `\`, `"`, `` ` `` und `$` maskiert `sed` nach der Desktop-Entry-Spezifikation:
 
 ```bash
 mkdir -p ~/.local/share/applications
-sed "s|^Exec=.*|Exec=$PWD/target/release/klickmeister|" packaging/io.github.jerry0205.klickmeister.desktop > ~/.local/share/applications/io.github.jerry0205.klickmeister.desktop
+bin=$(printf '%s\n' "$PWD/target/release/klickmeister" | sed 's/\\/\\\\\\\\/g; s/["`$]/\\\\&/g')
+{ grep -v '^Exec=' packaging/io.github.jerry0205.klickmeister.desktop; printf 'Exec="%s"\n' "$bin"; } > ~/.local/share/applications/io.github.jerry0205.klickmeister.desktop
 ```
 
 Die lokale Datei überdeckt die eines installierten Pakets; nach der Prüfung Link und Datei wieder entfernen. Läuft Klickmeister schon, versucht **Erneut versuchen** die Anmeldung danach noch einmal.

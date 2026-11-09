@@ -28,6 +28,7 @@ pub mod qobject {
         #[qproperty(bool, hotkey_ready)]
         #[qproperty(bool, hotkey_pending)]
         #[qproperty(bool, hotkey_configuring)]
+        #[qproperty(bool, hotkey_configurable)]
         #[qproperty(bool, running)]
         #[qproperty(bool, busy)]
         #[qproperty(i32, countdown_remaining)]
@@ -104,6 +105,8 @@ pub struct AppControllerRust {
     hotkey_ready: bool,
     hotkey_pending: bool,
     hotkey_configuring: bool,
+    /// False on GlobalShortcuts v1, where only the system settings change a bound hotkey.
+    hotkey_configurable: bool,
     running: bool,
     busy: bool,
     countdown_remaining: i32,
@@ -217,6 +220,7 @@ impl AppControllerRust {
             hotkey_ready: false,
             hotkey_pending: true,
             hotkey_configuring: false,
+            hotkey_configurable: true,
             running: false,
             busy: false,
             countdown_remaining: 0,
@@ -678,6 +682,9 @@ impl qobject::AppController {
                 ));
                 self.as_mut()
                     .set_hotkey_configuring(matches!(phase, HotkeyPhase::Configuring(_)));
+            }
+            WorkerEvent::HotkeyConfigurable(configurable) => {
+                self.as_mut().set_hotkey_configurable(configurable);
             }
             WorkerEvent::StartRequested(request) => {
                 // The worker owns the pending run; GUI flags can lag behind it.

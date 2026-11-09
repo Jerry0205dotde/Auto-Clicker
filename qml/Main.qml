@@ -375,7 +375,13 @@ Kirigami.ApplicationWindow {
                     icon.name: "input-keyboard"
                     text: controller.hotkey_ready ? qsTr("Ändern …") : qsTr("Erneut versuchen")
                     enabled: root.controlsEnabled && !controller.hotkey_pending
-                    onClicked: controller.configure_hotkey()
+                    // GlobalShortcuts v1 cannot open its settings for a bound hotkey.
+                    onClicked: {
+                        if (controller.hotkey_ready && !controller.hotkey_configurable)
+                            hotkeySettingsMessage.visible = true
+                        else
+                            controller.configure_hotkey()
+                    }
                     Controls.ToolTip.text: qsTr("Tastenkürzel für Start und Stopp ändern")
                     Controls.ToolTip.visible: hovered
                     Controls.ToolTip.delay: Kirigami.Units.toolTipDelay
@@ -461,6 +467,15 @@ Kirigami.ApplicationWindow {
                     visible: false
                     type: Kirigami.MessageType.Warning
                     text: qsTr("Klicken gestoppt: Der Bildschirm der festen Position hat sich geändert. Prüfe die Position vor dem nächsten Start.")
+                    showCloseButton: true
+                }
+                Kirigami.InlineMessage {
+                    id: hotkeySettingsMessage
+                    objectName: "hotkeySettingsMessage"
+                    Layout.fillWidth: true
+                    visible: false
+                    type: Kirigami.MessageType.Information
+                    text: qsTr("Dieses Desktop-Portal kann das Tastenkürzel nicht aus Klickmeister heraus ändern. Ändere es in den Systemeinstellungen unter „Kurzbefehle“.")
                     showCloseButton: true
                 }
             }

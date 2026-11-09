@@ -159,11 +159,6 @@ pub fn preserve_unloaded(path: &Path) -> Result<Option<PathBuf>, ConfigError> {
     ))
 }
 
-pub fn save(config: &AppConfig) -> Result<(), ConfigError> {
-    let path = config_path()?;
-    save_to(&path, config)
-}
-
 pub fn save_to(path: &Path, config: &AppConfig) -> Result<(), ConfigError> {
     let resolved_path = match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.is_symlink() => Some(fs::canonicalize(path).map_err(|error| {

@@ -19,5 +19,5 @@ LC_ALL=C comm -z -23 \
   <(git ls-files --deleted -z | LC_ALL=C sort -zu) > "$files"
 tar --no-recursion --null \
   --mtime="@$mtime" --owner=0 --group=0 --numeric-owner \
-  --transform="s|^|$prefix/|" \
+  --transform="s|^|$prefix/|S" \
   -czf "$output" --files-from="$files"

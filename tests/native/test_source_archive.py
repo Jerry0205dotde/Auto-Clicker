@@ -57,6 +57,31 @@ class SourceArchiveTests(unittest.TestCase):
                 )
                 self.assertEqual(tar.extractfile("prefix/kept.txt").read(), b"edited\n")
 
+    def test_relative_symlink_keeps_its_target(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            repo.mkdir()
+            git(repo, "init", "-q")
+            (repo / "kept.txt").write_text("kept\n")
+            git(repo, "add", ".")
+            git(repo, "commit", "-q", "-m", "init")
+            (repo / "link.txt").symlink_to("kept.txt")
+
+            archive = Path(temp) / "source.tar.gz"
+            result = subprocess.run(
+                ["bash", SCRIPT, archive, "prefix"],
+                cwd=repo,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+            with tarfile.open(archive) as tar:
+                link = tar.getmember("prefix/link.txt")
+                self.assertTrue(link.issym())
+                # Resolved next to the link, this is prefix/kept.txt.
+                self.assertEqual(link.linkname, "kept.txt")
+
 
 if __name__ == "__main__":
     unittest.main()

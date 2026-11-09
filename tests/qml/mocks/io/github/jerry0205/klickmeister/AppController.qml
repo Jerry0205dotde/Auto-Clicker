@@ -8,6 +8,8 @@ QtObject {
     property bool hotkey_ready: true
     property bool hotkey_pending: false
     property bool hotkey_configuring: false
+    property bool hotkey_configurable: true
+    property int configureCount: 0
     property bool running: false
     property bool busy: false
     property int countdown_remaining: 0
@@ -100,6 +102,6 @@ QtObject {
         stops += 1
         if (!deferStop) { running = false; busy = false; countdown_remaining = 0 }
     }
-    function configure_hotkey() {}
+    function configure_hotkey() { configureCount++ }
     function clear_error() { error_message = "" }
 }

@@ -57,7 +57,7 @@ Alle Startpfade verwenden denselben `StateMachine`. `Starting` und `Clicking` we
 - Der Positionswähler fragt keine Bildschirmaufnahme an. Das Screenshot-Portal liefert zu Aufnahmen keine verlässliche Ausschnittgeometrie.
 - Die Abfrage nach einem Runende erfasst nur Tastendrücke, die xdg-desktop-portal bis zu seiner Antwort schon empfangen und weitergeleitet hat. Davor liegen KWin, kglobalaccel und xdg-desktop-portal-kde. Hängt eine dieser Komponenten, während der Nutzer den Hotkey drückt und danach auf Stopp klickt, erreichen diese Tastendrücke das Portal erst nach der Antwort und gelten als neu. Sie wirken dann wie frische Betätigungen: Im Ruhezustand fordert jede einen Start an, während eines Runs stoppt jede ihn. Ein einzelner solcher Tastendruck, allgemein eine ungerade Anzahl, kann den Klicker so wieder starten; erneutes Drücken des Hotkeys oder die Stop-Schaltfläche beenden ihn wie gewohnt. Wie lange ein solcher Hänger dauert, ist nicht begrenzt. Eine zeitliche Startsperre nach einem Stop ist deshalb bewusst nicht eingebaut: Sie würde lange Hänger nicht abdecken und echte Tastendrücke verwerfen.
 - `SIGKILL` verhindert anwendungsseitiges RAII-Cleanup; der D-Bus-Verbindungsabbruch beendet die compositorseitige Sitzung dennoch.
-- Die D-Bus-Notify-Methode ist bei 100 CPS bewusst konservativer als das empfohlene EIS-Protokoll. Sie vermeidet eine weitere native FFI-Abhängigkeit und ist für das gesetzte Limit ausreichend.
+- Die D-Bus-Notify-Methode ist bewusst konservativer als das empfohlene EIS-Protokoll und vermeidet eine weitere native FFI-Abhängigkeit. Das Limit von 500 einzelnen Klicks pro Sekunde (Abschnitt 9) begrenzt auch die D-Bus-Last; bei so kurzen Intervallen können je nach Portal, Compositor und Rechner weniger Klicks ankommen als geplant.
 
 ## 8. Dependency-Liste
 
@@ -80,7 +80,7 @@ CXX-Qt erzeugt die notwendige Qt-FFI und enthält intern `unsafe`; der handgesch
 - Netzwerk-APIs im Produktionscode: keine gefunden.
 - Shellausführung oder Befehlszusammensetzung: keine gefunden.
 - Root, sudo, `/dev/uinput`: keine Verwendung.
-- systemd, Autostart, Daemon oder Prozess-Fork/-Spawn: keine Verwendung. Der einzige `std::thread` bleibt Bestandteil desselben Prozesses.
+- systemd, Autostart, Daemon oder Prozess-Fork/-Spawn: keine Verwendung. Die beiden eigenen `std::thread`s, der Worker (`klickmeister-worker`) und die Einzelinstanz-Verwaltung (`klickmeister-instance`), bleiben Bestandteil desselben Prozesses.
 - Fremdprozesse, Clipboard, Tastaturmitschnitt: keine Verwendung.
 - Busy-Wait oder Intervall 0: durch Design und Validierung ausgeschlossen.
 - Unbegrenzte Queue oder parallele Click-Loops: ausgeschlossen.

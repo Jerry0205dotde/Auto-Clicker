@@ -1009,6 +1009,29 @@ TestCase {
         compare(start.enabled, true)
     }
 
+    // Issue #132: GlobalShortcuts v1 cannot change a bound hotkey.
+    function test_unconfigurable_hotkey_points_to_system_settings() {
+        const change = findChild(main, "hotkeyConfigureButton")
+        const message = findChild(main, "hotkeySettingsMessage")
+        verify(change !== null)
+        verify(message !== null)
+
+        controller.hotkey_configurable = false
+        compare(change.text, "Ändern …")
+        compare(change.enabled, true)
+        compare(message.visible, false)
+        mouseClick(change)
+        compare(controller.configureCount, 0)
+        tryCompare(message, "visible", true)
+        verify(message.text.indexOf("„Kurzbefehle“") >= 0, message.text)
+
+        // An unavailable v1 hotkey is still registered again.
+        controller.hotkey_ready = false
+        compare(change.text, "Erneut versuchen")
+        mouseClick(change)
+        compare(controller.configureCount, 1)
+    }
+
     function test_run_control_stays_visible_at_minimum_size_data() {
         return [
             { tag: "cursor-ready", fixed: false, running: false, busy: false, ready: true, pending: false },
