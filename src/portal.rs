@@ -441,7 +441,6 @@ impl PortalClickSession {
         .map_err(PortalError::Send)
     }
 
-    /// Close the portal session after clicking stops or permissions change.
     pub async fn close(self) {
         let _ = timeout(CLOSE_TIMEOUT, self.session.close()).await;
         let _ = timeout(CLOSE_TIMEOUT, self.connection.close()).await;

@@ -181,13 +181,11 @@ impl ClickSettings {
         Ok(())
     }
 
-    /// Return the configured delay as a scheduler duration.
     pub const fn interval(&self) -> Duration {
         Duration::from_millis(self.interval_ms)
     }
 }
 
-/// Enforce the supported interval range and maximum click rate.
 pub fn validate_interval(interval_ms: u64, click_type: ClickType) -> Result<(), ValidationError> {
     let min_interval_ms = click_type.min_interval_ms();
     if interval_ms < min_interval_ms {

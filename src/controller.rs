@@ -474,7 +474,6 @@ impl qobject::AppController {
         Some(settings)
     }
 
-    /// Stop a run or an outstanding start request.
     pub fn stop(mut self: Pin<&mut Self>) {
         self.as_mut().send_command(Command::Stop);
     }
@@ -490,7 +489,6 @@ impl qobject::AppController {
         self.as_mut().send_command(Command::ConfigureHotkey);
     }
 
-    /// Dismiss the current user-visible error message.
     pub fn clear_error(mut self: Pin<&mut Self>) {
         self.as_mut().set_error_message(QString::default());
     }
