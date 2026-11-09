@@ -1,6 +1,6 @@
 # Klickmeister auf weiteren Systemen
 
-Dieses Dokument beschreibt, wie Klickmeister über KDE Plasma unter Wayland hinaus auf anderen Desktops und Betriebssystemen laufen kann. Es ist ein Plan; nichts davon ist umgesetzt. Das heutige Verhalten unter Plasma bleibt die Referenz, an der sich jedes weitere Backend messen muss.
+Dieses Dokument beschreibt, wie Klickmeister über KDE Plasma unter Wayland hinaus auf anderen Desktops und Betriebssystemen laufen kann. Es ist ein Plan; umgesetzt sind bisher die Phasen 1 und 2 (siehe [Reihenfolge](#reihenfolge)). Das heutige Verhalten unter Plasma bleibt die Referenz, an der sich jedes weitere Backend messen muss.
 
 ## Ziel und Grenzen
 
@@ -21,13 +21,13 @@ Dieses Dokument beschreibt, wie Klickmeister über KDE Plasma unter Wayland hina
 
 Jede Plattform muss mindestens so gut sein wie Klickmeister heute unter Plasma, und sie soll sich wie eine native Anwendung des jeweiligen Systems anfühlen. Ein Backend gilt erst als fertig, wenn es alle folgenden Punkte erfüllt:
 
-- **Geschwindigkeit:** Der native Benchmark (`tests/native/benchmark.py` oder ein gleichwertiges Testziel auf der Plattform) erreicht bei fester Position und geplanten 500 Klicks/s mindestens die heutigen Plasma-Werte, also etwa 365 Einzelklicks bzw. 440 Klicks als Doppelklicks pro Sekunde, gemessen auf vergleichbarer Hardware. Bei Raten, die Plasma heute vollständig zustellt, geht auch dort kein Klick verloren, und Druck und Loslassen kommen immer paarweise an. Unter Plasma darf kein Umbau die gemessenen Werte verschlechtern; jeder Backend-PR enthält eine Messung vorher und nachher.
+- **Geschwindigkeit:** Der native Benchmark (`tests/native/benchmark.py` oder ein gleichwertiges Testziel auf der Plattform) erreicht bei fester Position und geplanten 500 Klicks/s mindestens die heutigen Plasma-Werte, also etwa 498 Einzelklicks bzw. 500 Klicks als Doppelklicks pro Sekunde, gemessen auf vergleichbarer Hardware. Bei Raten, die Plasma heute vollständig zustellt, geht auch dort kein Klick verloren, und Druck und Loslassen kommen immer paarweise an. Unter Plasma darf kein Umbau die gemessenen Werte verschlechtern; jeder Backend-PR enthält eine Messung vorher und nachher.
 - **Funktionsumfang:** Alle Punkte aus [Funktionen](../README.md#funktionen) und [Erste Schritte](../README.md#erste-schritte) funktionieren: alle Maustasten, Einzel- und Doppelklick, Mauszeiger und feste Position auf jedem Monitor, Positionsauswahl mit Pfeiltasten, Countdown, Wiederholungen, globales Kürzel für Start und Stopp, Einzelinstanz.
 - **Sicherheit und Transparenz:** Solange Klickmeister klicken darf, ist das sichtbar und mit einem Griff zu beenden, wie das KDE-Symbol „Fernsteuerung“. Wo das System selbst nichts anzeigt (Windows, X11, macOS), übernimmt das ein eigenes Symbol in der Taskleiste bzw. Menüleiste mit **Stoppen**. Klickmeister liest weiterhin keine Tastatureingaben außer dem eigenen Kürzel, keine Bildschirminhalte und sendet keine Daten.
 - **Nativ:** Aussehen, Dialoge, Tastenkürzel-Eingabe, Berechtigungsabfragen, Speicherorte, Installation und Updates folgen den Konventionen der Plattform (siehe [Oberfläche](#oberfläche) und [Pakete und CI](#pakete-und-ci)). Hell/Dunkel-Modus, Akzentfarbe, Skalierung und Bildschirmleser funktionieren wie bei anderen Anwendungen des Systems.
 - **Geprüft auf echter Hardware:** Neben der CI läuft auf jeder Plattform die Prüfliste aus [tests/native](../tests/native/README.md) sinngemäß auf einem echten Gerät, einschließlich mehrerer Monitore mit unterschiedlicher Skalierung.
 
-Wo die Plattform mehr erlaubt als das Portal, nutzt Klickmeister das. Windows, X11 und macOS erzeugen Klicks ohne D-Bus-Umweg und sollten die 500 Klicks/s deutlich näher erreichen. Unter Linux soll libei (siehe unten) auch Plasma selbst schneller machen.
+Wo die Plattform mehr erlaubt als das Portal, nutzt Klickmeister das. Windows, X11 und macOS erzeugen Klicks ohne D-Bus-Umweg und sollten die 500 Klicks/s deutlich näher erreichen. Unter Plasma klickt Klickmeister dafür bereits über libei (siehe unten).
 
 ## Nicht vorgesehen
 
@@ -41,7 +41,7 @@ Portal-spezifisch heißt nicht KDE-spezifisch. RemoteDesktop, ScreenCast, Global
 
 | Bereich | Stelle | Bindung |
 | --- | --- | --- |
-| Klick-Eingabe | `src/portal.rs` (`PortalClickSession`) | RemoteDesktop mit `NotifyPointerMotionAbsolute`/`NotifyPointerButton` |
+| Klick-Eingabe | `src/portal.rs` (`PortalClickSession`), `src/eis.rs` | RemoteDesktop über libei (`ConnectToEIS`), ohne libei mit `NotifyPointerMotionAbsolute`/`NotifyPointerButton` |
 | Maustastencodes | `src/model.rs` (`MouseButton::evdev_code`) | Linux-evdev-Codes im sonst neutralen Modell |
 | Feste Position | `src/portal.rs` (`select_monitor_stream`) | ScreenCast-Streams mit Position und Größe; diese Metadaten sind laut Spezifikation optional |
 | Globales Kürzel | `src/worker.rs` (`setup_hotkey`, `HotkeyState`, `StartBarrier`) | GlobalShortcuts-Portal direkt im Worker, Schutz vor verspäteten Tastendrücken über die D-Bus-Nachrichtenreihenfolge |
@@ -89,7 +89,7 @@ Dabei gilt:
 | Windows | `SendInput` über das Crate `windows` | `RegisterHotKey` mit `MOD_NOREPEAT` | keine Eingaben in Fenster mit höherer Integritätsstufe (Admin-Programme) |
 | macOS | `CGEventPost` über `objc2-core-graphics`, Doppelklick mit `kCGMouseEventClickState` | `RegisterEventHotKey` | Freigabe unter **Bedienungshilfen** nötig und an die Signatur gebunden |
 
-**Portal und libei.** RemoteDesktop bietet mit `ConnectToEIS` einen Eingabekanal über libei (in Rust: `reis`). Klicks laufen dann nicht mehr als einzelne D-Bus-Aufrufe. Das kann den unter KWin 6.7.5 beobachteten Verlust von Klicks bei Druck und Loslassen ohne Zwischenantwort beheben und die erreichbare Klickrate erhöhen; beides ist zu messen. Nach dem Wechsel auf EIS darf dieselbe Sitzung keine `Notify*`-Aufrufe mehr senden.
+**Portal und libei.** RemoteDesktop bietet mit `ConnectToEIS` einen Eingabekanal über libei (in Rust: `reis`), und Klickmeister nutzt ihn (`src/eis.rs`). Ein Klickzyklus geht als ein Schreibvorgang an KWin und endet mit einer einzigen `ei_connection.sync`-Rundreise statt einer D-Bus-Rundreise je Ereignis. Druck und Loslassen ohne Zwischenantwort verlieren dabei unter KWin 6.7.5 keine Klicks. Auf dem i5-7200U stieg die Rate bei geplanten 500 Klicks/s von etwa 410 auf 498 Einzelklicks bzw. von 485 auf 500 Klicks als Doppelklicks pro Sekunde, und die App braucht etwa ein Drittel der CPU-Zeit. Nach `ConnectToEIS` sendet dieselbe Sitzung keine `Notify*`-Aufrufe mehr; nur ein gescheiterter `ConnectToEIS`-Aufruf lässt sie beim bisherigen Weg.
 
 **Zeitbasis unter Windows.** Der Worker wartet heute mit `tokio::time::sleep_until`. Unter Windows ist dessen Auflösung ohne Weiteres zu grob für das 2- bzw. 4-ms-Raster, und `timeBeginPeriod` gilt unter Windows 11 für verdeckte oder minimierte Fenster nicht zuverlässig. Das Windows-Backend wartet deshalb auf einen hochauflösenden Waitable Timer (`CreateWaitableTimerExW` mit `CREATE_WAITABLE_TIMER_HIGH_RESOLUTION`), ohne Busy-Wait. Der Benchmark prüft die Mindestraten auch bei verdecktem und minimiertem Klickmeister-Fenster.
 
@@ -140,15 +140,15 @@ Jede Phase ist ein eigener PR oder eine kleine Reihe davon. Nach jeder Phase mus
 | Phase | Ergebnis | Aufwand (Personentage) |
 | --- | --- | ---: |
 | 1 | `InputBackend` einführen, Portal-Klicks dahinter, `evdev_code` ins Portal-Backend | 2–3 |
-| 2 | `ShortcutBackend` einführen, Portal-Kürzel samt Startbarriere dahinter, Startsperre an Fähigkeiten, `--toggle` | 3–5 |
-| 3 | portabler Build: eigenes Theme-Singleton statt Kirigami, Stilwahl, Symbole, Pfade, `build.rs` nach Zielsystem, Einzelinstanz-Abstraktion | 5–8 |
-| 4 | GNOME prüfen und Texte von „KDE“ lösen, Flatpak | 4–6 |
-| 5 | X11-Backend | 3–5 |
-| 6 | Windows-Backend mit hochauflösender Zeitbasis, Taskleisten-Symbol, Kürzel-Dialog, signiertes Paket | 8–12 |
-| 7 | macOS-Backend, Menüleiste, Bedienungshilfen-Abfrage, signiertes Paket | 9–13 |
-| 8 | wlroots/Hyprland über `wlr-virtual-pointer` | 5–8 |
-| 9 | libei im Portal-Backend für mehr Geschwindigkeit unter Linux | 4–7 |
+| 2 | libei im Portal-Backend für mehr Geschwindigkeit unter Linux, `Notify*` als Rückfall | 4–7 |
+| 3 | `ShortcutBackend` einführen, Portal-Kürzel samt Startbarriere dahinter, Startsperre an Fähigkeiten, `--toggle` | 3–5 |
+| 4 | portabler Build: eigenes Theme-Singleton statt Kirigami, Stilwahl, Symbole, Pfade, `build.rs` nach Zielsystem, Einzelinstanz-Abstraktion | 5–8 |
+| 5 | GNOME prüfen und Texte von „KDE“ lösen, Flatpak | 4–6 |
+| 6 | X11-Backend | 3–5 |
+| 7 | Windows-Backend mit hochauflösender Zeitbasis, Taskleisten-Symbol, Kürzel-Dialog, signiertes Paket | 8–12 |
+| 8 | macOS-Backend, Menüleiste, Bedienungshilfen-Abfrage, signiertes Paket | 9–13 |
+| 9 | wlroots/Hyprland über `wlr-virtual-pointer` | 5–8 |
 
-Insgesamt etwa 43–67 Personentage. libei ist keine Option mehr, sondern der Weg, auch unter Linux über die heutigen Werte hinauszukommen. Flatpak in Phase 4 bringt mit wenig Aufwand die meisten zusätzlichen Linux-Nutzer; Windows bringt die meisten Nutzer überhaupt, braucht aber die Vorarbeit aus den Phasen 1 bis 3.
+Insgesamt etwa 43–67 Personentage. libei kommt direkt nach Phase 1, weil es als einziges weiteres Backend auf der heutigen Referenzplattform messbar ist und die Plasma-Werte anhebt, an denen sich alle späteren Backends messen. Flatpak in Phase 5 bringt mit wenig Aufwand die meisten zusätzlichen Linux-Nutzer; Windows bringt die meisten Nutzer überhaupt, braucht aber die Vorarbeit aus den Phasen 1, 3 und 4.
 
 Der erste PR ist eine reine Verschiebung ohne Verhaltensänderung: `backend/input` mit genau den Operationen, die der Worker heute an `PortalClickSession` aufruft (`create`, `click`, `matches_monitor`, `is_closed`, `wait_closed`, `close`). Die vorhandenen Portaltests bleiben, dazu kommen Vertragstests mit einem simulierten Backend für Abbruch und Sitzungsverlust. Countdown, Stop, die 60 Sekunden bis zum Schließen der Freigabe und alle Fehlermeldungen bleiben gleich, und der Benchmark auf dem Server zeigt vorher und nachher dieselben Klickraten. Die Kürzel-Extraktion folgt getrennt, weil sie die empfindliche Startbarriere betrifft.

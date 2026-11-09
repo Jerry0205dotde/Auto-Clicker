@@ -1209,7 +1209,7 @@ async fn run_worker(
             }
             Wake::ClickTick => {
                 let Some(run) = active.as_mut() else { continue; };
-                let Some(session) = click_session.as_ref() else {
+                let Some(session) = click_session.as_mut() else {
                     fail_run(&mut machine, &emit);
                     active = None;
                     (emit)(WorkerEvent::Error("Die Freigabe für die Maussteuerung wurde unerwartet beendet. Versuche den Start erneut.".to_owned()));

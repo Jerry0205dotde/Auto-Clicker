@@ -14,6 +14,8 @@ cxx = "1.0.194"
 cxx-qt = "0.10.0"
 cxx-qt-lib = { version = "0.10.0", features = ["qt_full"] }
 futures-util = "0.3.31"
+reis = { version = "0.7.1", features = ["tokio"] }
+rustix = { version = "1.1.4", features = ["time"] }
 serde = { version = "1.0.219", features = ["derive"] }
 thiserror = "2.0.16"
 tokio = { version = "1.47.1", features = ["macros", "rt", "sync", "time"] }

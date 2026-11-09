@@ -1,5 +1,6 @@
 pub mod config;
 pub mod controller;
+pub mod eis;
 pub mod input;
 pub mod instance;
 pub mod model;
