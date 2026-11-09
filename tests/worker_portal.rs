@@ -12,7 +12,7 @@ use ashpd::zbus::{
 use klickmeister::{
     model::{ClickSettings, ClickType, MonitorGeometry, MouseButton},
     parent_window,
-    portal::PortalError,
+    portal::{PortalError, evdev_code},
     state::RunState,
     worker::{Command, HotkeyPhase, StartRequest, WorkerEvent, WorkerHandle},
 };
@@ -1737,7 +1737,7 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
                     .unwrap_or_else(|e| e.into_inner())
                     .buttons
                     .clone();
-                let expected = [(button.evdev_code(), 1), (button.evdev_code(), 0)]
+                let expected = [(evdev_code(button), 1), (evdev_code(button), 0)]
                     .repeat(3 * usize::from(click_type.clicks_per_tick()));
                 assert_eq!(buttons, expected);
             }
@@ -1819,7 +1819,7 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
         assert_eq!(observed.lock().unwrap_or_else(|e| e.into_inner()).motions,
             vec![(42, 1919.0, 1079.0); 3]);
         assert_eq!(&observed.lock().unwrap_or_else(|e| e.into_inner()).buttons[before..],
-            [(MouseButton::Left.evdev_code(), 1), (MouseButton::Left.evdev_code(), 0)].repeat(3));
+            [(evdev_code(MouseButton::Left), 1), (evdev_code(MouseButton::Left), 0)].repeat(3));
         observed.lock().unwrap_or_else(|e| e.into_inner()).delay_start = false;
 
         for failed_state in [1, 0] {

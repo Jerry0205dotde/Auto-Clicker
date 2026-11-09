@@ -39,9 +39,10 @@ use tokio::{
 };
 
 use crate::{
+    input::{ClickSession, PlatformClickSession},
     model::{ClickSettings, ValidationError},
     parent_window,
-    portal::{PortalClickSession, PortalError, register_connection, watch_portal_owner},
+    portal::{register_connection, watch_portal_owner},
     scheduler::Schedule,
     state::{RunState, StateMachine},
 };
@@ -451,7 +452,7 @@ struct PendingCountdown {
 }
 
 struct StartedSession {
-    session: PortalClickSession,
+    session: PlatformClickSession,
     settings: ClickSettings,
     /// A button start at the cursor still needs its countdown after the permission.
     delay: bool,
@@ -676,7 +677,7 @@ async fn setup_click_session(
     delay: bool,
     cancel: oneshot::Receiver<()>,
 ) -> Result<StartedSession, String> {
-    let session = PortalClickSession::create(settings.monitor, cancel)
+    let session = PlatformClickSession::create(settings.monitor, cancel)
         .await
         .map_err(|error| error.to_string())?;
     Ok(StartedSession {
@@ -710,7 +711,7 @@ async fn next_hotkey(stream: &mut Option<HotkeyState>) -> Option<HotkeySignal> {
     }
 }
 
-async fn wait_click_session_closed(session: &mut Option<PortalClickSession>) {
+async fn wait_click_session_closed(session: &mut Option<PlatformClickSession>) {
     match session {
         Some(session) => session.wait_closed().await,
         None => future::pending().await,
@@ -719,7 +720,7 @@ async fn wait_click_session_closed(session: &mut Option<PortalClickSession>) {
 
 /// Report whether an active or pending run ended with the closed session.
 async fn discard_closed_click_session(
-    session: &mut Option<PortalClickSession>,
+    session: &mut Option<PlatformClickSession>,
     machine: &mut StateMachine,
     active: &mut Option<ActiveRun>,
     countdown: &mut Option<PendingCountdown>,
@@ -731,7 +732,9 @@ async fn discard_closed_click_session(
     }
     if was_running {
         fail_run(machine, emit);
-        (emit)(WorkerEvent::Error(PortalError::SessionClosed.to_string()));
+        (emit)(WorkerEvent::Error(
+            PlatformClickSession::closed_error().to_string(),
+        ));
     } else {
         (emit)(WorkerEvent::Status(
             "Freigabe erneut erforderlich".to_owned(),
@@ -780,7 +783,7 @@ enum Wake {
 /// Everything the worker loop waits on; `None` deadlines are not armed.
 struct WakeSources<'a> {
     control: &'a mut watch::Receiver<Control>,
-    click_session: &'a mut Option<PortalClickSession>,
+    click_session: &'a mut Option<PlatformClickSession>,
     commands: &'a mut mpsc::Receiver<QueuedCommand>,
     start_request: &'a mut Option<PendingStartRequest>,
     start_task: &'a mut Option<JoinHandle<Result<StartedSession, String>>>,
@@ -838,7 +841,7 @@ async fn run_worker(
     session_idle: Duration,
 ) {
     let mut machine = StateMachine::default();
-    let mut click_session: Option<PortalClickSession> = None;
+    let mut click_session: Option<PlatformClickSession> = None;
     let mut click_session_idle: Option<Instant> = None;
     let mut active: Option<ActiveRun> = None;
     let mut countdown: Option<PendingCountdown> = None;
@@ -962,7 +965,7 @@ async fn run_worker(
                             (emit)(WorkerEvent::Error("Richte vor dem Start ein Tastenkürzel für Start und Stopp ein.".to_owned()));
                             continue;
                         }
-                        if click_session.as_mut().is_some_and(PortalClickSession::is_closed)
+                        if click_session.as_mut().is_some_and(PlatformClickSession::is_closed)
                             && discard_closed_click_session(&mut click_session, &mut machine, &mut active, &mut countdown, &emit).await
                         {
                             continue;
@@ -1042,7 +1045,7 @@ async fn run_worker(
                         if session.is_closed() {
                             session.close().await;
                             fail_run(&mut machine, &emit);
-                            (emit)(WorkerEvent::Error(PortalError::SessionClosed.to_string()));
+                            (emit)(WorkerEvent::Error(PlatformClickSession::closed_error().to_string()));
                         } else {
                             click_session = Some(session);
                             begin_run(&mut machine, &mut active, &mut countdown, settings, delay, &emit);

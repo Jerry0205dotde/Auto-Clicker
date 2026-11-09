@@ -22,7 +22,8 @@ use tokio::{
 };
 
 use crate::{
-    model::{ClickSettings, MonitorGeometry},
+    input::ClickSession,
+    model::{ClickSettings, MonitorGeometry, MouseButton},
     parent_window,
 };
 
@@ -191,9 +192,11 @@ fn select_monitor_stream(
     })
 }
 
-impl PortalClickSession {
+impl ClickSession for PortalClickSession {
+    type Error = PortalError;
+
     /// Request pointer permission and verify any fixed-position monitor geometry.
-    pub async fn create(
+    async fn create(
         monitor: Option<MonitorGeometry>,
         mut cancel: oneshot::Receiver<()>,
     ) -> Result<Self, PortalError> {
@@ -240,6 +243,78 @@ impl PortalClickSession {
         }
     }
 
+    /// Reuse a session only when its granted monitor matches current settings.
+    fn matches_monitor(&self, monitor: Option<MonitorGeometry>) -> bool {
+        match (self.stream, monitor) {
+            (None, None) => true,
+            (Some(stream), Some(expected)) => {
+                validate_monitor(expected, stream.position, (stream.width, stream.height)).is_ok()
+            }
+            _ => false,
+        }
+    }
+
+    /// Resolve when the portal revokes this session, including while no run is active.
+    async fn wait_closed(&mut self) {
+        self.closed.as_mut().await;
+    }
+
+    /// Poll a queued revocation before reusing a session for a new run.
+    fn is_closed(&mut self) -> bool {
+        self.closed.is_terminated() || self.closed.as_mut().now_or_never().is_some()
+    }
+
+    /// Move within the verified monitor if needed and emit a bounded click cycle.
+    async fn click(&self, settings: &ClickSettings) -> Result<(), PortalError> {
+        if let Some((x, y)) = settings.position {
+            let stream = self.stream.ok_or(PortalError::MissingMonitorStream)?;
+            if x >= stream.width.max(0) as u32 || y >= stream.height.max(0) as u32 {
+                return Err(PortalError::PositionOutsideStream {
+                    x,
+                    y,
+                    width: stream.width,
+                    height: stream.height,
+                });
+            }
+            timeout(
+                EVENT_TIMEOUT,
+                self.portal.notify_pointer_motion_absolute(
+                    &self.session,
+                    stream.node_id,
+                    f64::from(x),
+                    f64::from(y),
+                    NotifyPointerMotionAbsoluteOptions::default(),
+                ),
+            )
+            .await
+            .map_err(|_| PortalError::EventTimeout)?
+            .map_err(PortalError::Send)?;
+        }
+
+        let button = evdev_code(settings.button);
+        for _ in 0..settings.click_type.clicks_per_tick() {
+            for state in [KeyState::Pressed, KeyState::Released] {
+                if let Err(error) = self.send_button(button, state).await {
+                    // A failed or timed-out press may still have reached KWin.
+                    let _ = self.send_button(button, KeyState::Released).await;
+                    return Err(error);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn close(self) {
+        let _ = timeout(CLOSE_TIMEOUT, self.session.close()).await;
+        let _ = timeout(CLOSE_TIMEOUT, self.connection.close()).await;
+    }
+
+    fn closed_error() -> PortalError {
+        PortalError::SessionClosed
+    }
+}
+
+impl PortalClickSession {
     /// Negotiate permission while exposing the session to cancellation cleanup.
     async fn create_on(
         connection: &ashpd::zbus::Connection,
@@ -368,67 +443,6 @@ impl PortalClickSession {
         }
     }
 
-    /// Reuse a session only when its granted monitor matches current settings.
-    pub fn matches_monitor(&self, monitor: Option<MonitorGeometry>) -> bool {
-        match (self.stream, monitor) {
-            (None, None) => true,
-            (Some(stream), Some(expected)) => {
-                validate_monitor(expected, stream.position, (stream.width, stream.height)).is_ok()
-            }
-            _ => false,
-        }
-    }
-
-    /// Resolve when the portal revokes this session, including while no run is active.
-    pub async fn wait_closed(&mut self) {
-        self.closed.as_mut().await;
-    }
-
-    /// Poll a queued revocation before reusing a session for a new run.
-    pub fn is_closed(&mut self) -> bool {
-        self.closed.is_terminated() || self.closed.as_mut().now_or_never().is_some()
-    }
-
-    /// Move within the verified monitor if needed and emit a bounded click cycle.
-    pub async fn click(&self, settings: &ClickSettings) -> Result<(), PortalError> {
-        if let Some((x, y)) = settings.position {
-            let stream = self.stream.ok_or(PortalError::MissingMonitorStream)?;
-            if x >= stream.width.max(0) as u32 || y >= stream.height.max(0) as u32 {
-                return Err(PortalError::PositionOutsideStream {
-                    x,
-                    y,
-                    width: stream.width,
-                    height: stream.height,
-                });
-            }
-            timeout(
-                EVENT_TIMEOUT,
-                self.portal.notify_pointer_motion_absolute(
-                    &self.session,
-                    stream.node_id,
-                    f64::from(x),
-                    f64::from(y),
-                    NotifyPointerMotionAbsoluteOptions::default(),
-                ),
-            )
-            .await
-            .map_err(|_| PortalError::EventTimeout)?
-            .map_err(PortalError::Send)?;
-        }
-
-        let button = settings.button.evdev_code();
-        for _ in 0..settings.click_type.clicks_per_tick() {
-            for state in [KeyState::Pressed, KeyState::Released] {
-                if let Err(error) = self.send_button(button, state).await {
-                    // A failed or timed-out press may still have reached KWin.
-                    let _ = self.send_button(button, KeyState::Released).await;
-                    return Err(error);
-                }
-            }
-        }
-        Ok(())
-    }
-
     /// Send each button transition with the same timeout and error handling.
     async fn send_button(&self, button: i32, state: KeyState) -> Result<(), PortalError> {
         timeout(
@@ -440,10 +454,14 @@ impl PortalClickSession {
         .map_err(|_| PortalError::EventTimeout)?
         .map_err(PortalError::Send)
     }
+}
 
-    pub async fn close(self) {
-        let _ = timeout(CLOSE_TIMEOUT, self.session.close()).await;
-        let _ = timeout(CLOSE_TIMEOUT, self.connection.close()).await;
+/// The Linux evdev code that RemoteDesktop expects for a button.
+pub const fn evdev_code(button: MouseButton) -> i32 {
+    match button {
+        MouseButton::Left => 0x110,
+        MouseButton::Right => 0x111,
+        MouseButton::Middle => 0x112,
     }
 }
 
@@ -577,6 +595,13 @@ mod tests {
             Err(PortalError::MissingMonitorStream)
         ));
         Ok(())
+    }
+
+    #[test]
+    fn maps_only_supported_mouse_buttons() {
+        assert_eq!(evdev_code(MouseButton::Left), 0x110);
+        assert_eq!(evdev_code(MouseButton::Right), 0x111);
+        assert_eq!(evdev_code(MouseButton::Middle), 0x112);
     }
 
     #[test]
