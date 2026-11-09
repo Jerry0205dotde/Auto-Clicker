@@ -250,8 +250,7 @@ impl AppControllerRust {
 
     /// Convert the button, click type and interval shared by drafts and runs.
     fn click_controls(&self) -> Result<(MouseButton, ClickType, u64), String> {
-        let button =
-            MouseButton::try_from(self.mouse_button).map_err(|error| error.to_string())?;
+        let button = MouseButton::try_from(self.mouse_button).map_err(|error| error.to_string())?;
         let click_type = ClickType::try_from(self.click_type).map_err(|error| error.to_string())?;
         let interval_ms = u64::try_from(self.interval_ms)
             .map_err(|_| "Wähle ein Klickintervall größer als 0 ms.".to_owned())?;
