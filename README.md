@@ -168,11 +168,12 @@ sudo ln -sf "$PWD/target/release/klickmeister" /usr/local/bin/klickmeister
 install -Dm644 packaging/io.github.jerry0205.klickmeister.desktop -t ~/.local/share/applications/
 ```
 
-Oder eine lokale Datei mit absolutem `Exec` verwenden:
+Oder eine lokale Datei mit absolutem `Exec` verwenden. Der Pfad steht dort in Anführungszeichen, damit auch Leerzeichen, `&` oder `|` im Checkout-Pfad funktionieren; `\`, `"`, `` ` `` und `$` maskiert `sed` nach der Desktop-Entry-Spezifikation:
 
 ```bash
 mkdir -p ~/.local/share/applications
-sed "s|^Exec=.*|Exec=$PWD/target/release/klickmeister|" packaging/io.github.jerry0205.klickmeister.desktop > ~/.local/share/applications/io.github.jerry0205.klickmeister.desktop
+bin=$(printf '%s\n' "$PWD/target/release/klickmeister" | sed 's/\\/\\\\\\\\/g; s/["`$]/\\\\&/g')
+{ grep -v '^Exec=' packaging/io.github.jerry0205.klickmeister.desktop; printf 'Exec="%s"\n' "$bin"; } > ~/.local/share/applications/io.github.jerry0205.klickmeister.desktop
 ```
 
 Die lokale Datei überdeckt die eines installierten Pakets; nach der Prüfung Link und Datei wieder entfernen. Läuft Klickmeister schon, versucht **Erneut versuchen** die Anmeldung danach noch einmal.
