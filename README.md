@@ -108,7 +108,7 @@ Klickmeister läuft pro Sitzung nur einmal. KDE leitet einen Druck auf das Taste
 
 ### Funktioniert Klickmeister unter X11?
 
-Klickmeister ist für KDE Plasma unter Wayland ausgelegt. X11 wird nicht unterstützt.
+Klickmeister ist für KDE Plasma unter Wayland ausgelegt. X11 wird nicht unterstützt. Wie Klickmeister auf X11, anderen Desktops, Windows und macOS laufen könnte, beschreibt der Plan unter [Klickmeister auf weiteren Systemen](docs/CROSS_PLATFORM.md).
 
 ## Entwicklung
 
