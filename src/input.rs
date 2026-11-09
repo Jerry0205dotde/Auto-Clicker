@@ -30,7 +30,7 @@ pub trait ClickSession: Sized + Send + 'static {
     fn is_closed(&mut self) -> bool;
 
     /// Emit one click cycle: a single or double click at the configured target.
-    fn click(&self, settings: &ClickSettings) -> impl Future<Output = Result<(), Self::Error>>;
+    fn click(&mut self, settings: &ClickSettings) -> impl Future<Output = Result<(), Self::Error>>;
 
     /// End the session within a bounded time.
     fn close(self) -> impl Future<Output = ()>;

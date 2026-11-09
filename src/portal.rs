@@ -5,7 +5,7 @@ use ashpd::{
         PersistMode, Session,
         remote_desktop::{
             DeviceType, KeyState, NotifyPointerMotionAbsoluteOptions, RemoteDesktop,
-            SelectDevicesOptions,
+            SelectDevicesOptions, SelectedDevices,
         },
         screencast::{CursorMode, Screencast, SelectSourcesOptions, SourceType},
     },
@@ -22,6 +22,7 @@ use tokio::{
 };
 
 use crate::{
+    eis::{EisError, EisInput, RegionTarget},
     input::ClickSession,
     model::{ClickSettings, MonitorGeometry, MouseButton},
     parent_window,
@@ -29,6 +30,8 @@ use crate::{
 
 const EVENT_TIMEOUT: Duration = Duration::from_millis(250);
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
+/// KWin answers the libei handshake and announces its device within milliseconds.
+const EIS_SETUP_TIMEOUT: Duration = Duration::from_secs(2);
 const PORTAL_NAME: &str = "org.freedesktop.portal.Desktop";
 
 /// Return the portal's current unique name and a future that resolves when
@@ -128,6 +131,10 @@ pub enum PortalError {
     Send(#[source] ashpd::Error),
     #[error("KDE hat die Maussteuerung nicht rechtzeitig bestätigt. Versuche den Start erneut.")]
     EventTimeout,
+    #[error("Die Maussteuerung ist nicht verfügbar. Prüfe den KDE-Portaldienst. Details: {0}")]
+    EisUnavailable(#[source] EisError),
+    #[error("Der Klick konnte nicht ausgeführt werden: {0}")]
+    EisSend(#[source] EisError),
 }
 
 pub struct PortalClickSession {
@@ -136,6 +143,8 @@ pub struct PortalClickSession {
     session: Arc<Session<RemoteDesktop>>,
     closed: ClosedWatcher,
     stream: Option<MonitorStream>,
+    /// Clicks go over libei when the portal offers it, otherwise as `Notify*` calls.
+    eis: Option<Box<EisInput>>,
 }
 
 type ClosedWatcher = Pin<Box<dyn FusedFuture<Output = ()> + Send>>;
@@ -216,7 +225,7 @@ impl ClickSession for PortalClickSession {
             result = Self::create_on(&connection, &mut session, &mut closed, monitor) => result,
         };
         match result {
-            Ok((portal, stream)) => {
+            Ok((portal, stream, eis)) => {
                 let mut closed = closed.ok_or(PortalError::SessionWatchUnavailable)?;
                 if closed.is_terminated() || closed.as_mut().now_or_never().is_some() {
                     if let Some(session) = session {
@@ -231,6 +240,7 @@ impl ClickSession for PortalClickSession {
                     session: session.ok_or(PortalError::Cancelled)?,
                     closed,
                     stream,
+                    eis,
                 })
             }
             Err(error) => {
@@ -254,28 +264,64 @@ impl ClickSession for PortalClickSession {
         }
     }
 
-    /// Resolve when the portal revokes this session, including while no run is active.
+    /// Resolve when the portal revokes this session or KWin ends its libei
+    /// connection, including while no run is active.
     async fn wait_closed(&mut self) {
-        self.closed.as_mut().await;
+        match self.eis.as_mut() {
+            Some(eis) => tokio::select! {
+                () = self.closed.as_mut() => {}
+                () = eis.wait_lost() => {}
+            },
+            None => self.closed.as_mut().await,
+        }
     }
 
     /// Poll a queued revocation before reusing a session for a new run.
     fn is_closed(&mut self) -> bool {
-        self.closed.is_terminated() || self.closed.as_mut().now_or_never().is_some()
+        self.closed.is_terminated()
+            || self.closed.as_mut().now_or_never().is_some()
+            || self.eis.as_mut().is_some_and(|eis| eis.is_lost())
     }
 
     /// Move within the verified monitor if needed and emit a bounded click cycle.
-    async fn click(&self, settings: &ClickSettings) -> Result<(), PortalError> {
-        if let Some((x, y)) = settings.position {
-            let stream = self.stream.ok_or(PortalError::MissingMonitorStream)?;
-            if x >= stream.width.max(0) as u32 || y >= stream.height.max(0) as u32 {
-                return Err(PortalError::PositionOutsideStream {
-                    x,
-                    y,
-                    width: stream.width,
-                    height: stream.height,
-                });
+    async fn click(&mut self, settings: &ClickSettings) -> Result<(), PortalError> {
+        let position = match settings.position {
+            Some((x, y)) => {
+                let stream = self.stream.ok_or(PortalError::MissingMonitorStream)?;
+                if x >= stream.width.max(0) as u32 || y >= stream.height.max(0) as u32 {
+                    return Err(PortalError::PositionOutsideStream {
+                        x,
+                        y,
+                        width: stream.width,
+                        height: stream.height,
+                    });
+                }
+                Some((stream, x, y))
             }
+            None => None,
+        };
+        let button = evdev_code(settings.button);
+        let clicks = settings.click_type.clicks_per_tick();
+        if let Some(eis) = self.eis.as_mut() {
+            // Press and release travel together; the cycle's single round
+            // trip confirms that KWin processed both.
+            return timeout(
+                EVENT_TIMEOUT,
+                eis.click(
+                    button.cast_unsigned(),
+                    clicks,
+                    position.map(|(_, x, y)| (x, y)),
+                ),
+            )
+            .await
+            .map_err(|_| PortalError::EventTimeout)?
+            .map_err(|error| match error {
+                EisError::Disconnected => PortalError::SessionClosed,
+                error => PortalError::EisSend(error),
+            });
+        }
+
+        if let Some((stream, x, y)) = position {
             timeout(
                 EVENT_TIMEOUT,
                 self.portal.notify_pointer_motion_absolute(
@@ -291,8 +337,7 @@ impl ClickSession for PortalClickSession {
             .map_err(PortalError::Send)?;
         }
 
-        let button = evdev_code(settings.button);
-        for _ in 0..settings.click_type.clicks_per_tick() {
+        for _ in 0..clicks {
             for state in [KeyState::Pressed, KeyState::Released] {
                 if let Err(error) = self.send_button(button, state).await {
                     // A failed or timed-out press may still have reached KWin.
@@ -305,6 +350,9 @@ impl ClickSession for PortalClickSession {
     }
 
     async fn close(self) {
+        if let Some(eis) = self.eis {
+            let _ = timeout(CLOSE_TIMEOUT, eis.close()).await;
+        }
         let _ = timeout(CLOSE_TIMEOUT, self.session.close()).await;
         let _ = timeout(CLOSE_TIMEOUT, self.connection.close()).await;
     }
@@ -321,7 +369,7 @@ impl PortalClickSession {
         owned_session: &mut Option<Arc<Session<RemoteDesktop>>>,
         owned_closed: &mut Option<ClosedWatcher>,
         monitor: Option<MonitorGeometry>,
-    ) -> Result<(RemoteDesktop, Option<MonitorStream>), PortalError> {
+    ) -> Result<(RemoteDesktop, Option<MonitorStream>, Option<Box<EisInput>>), PortalError> {
         register_connection(connection)
             .await
             .map_err(PortalError::Unavailable)?;
@@ -434,7 +482,8 @@ impl PortalClickSession {
                 None
             };
 
-            Ok((portal, stream))
+            let eis = connect_eis(&portal, session, &selected, stream).await?;
+            Ok((portal, stream, eis))
         };
         tokio::select! {
             biased;
@@ -453,6 +502,36 @@ impl PortalClickSession {
         .await
         .map_err(|_| PortalError::EventTimeout)?
         .map_err(PortalError::Send)
+    }
+}
+
+/// Switch the started session to libei where the portal offers it. Only a
+/// failed `ConnectToEIS` call keeps the `Notify*` methods; once KWin handed
+/// out a socket, any later failure ends the start instead.
+async fn connect_eis(
+    portal: &RemoteDesktop,
+    session: &Session<RemoteDesktop>,
+    selected: &SelectedDevices,
+    stream: Option<MonitorStream>,
+) -> Result<Option<Box<EisInput>>, PortalError> {
+    let Ok(fd) = portal.connect_to_eis(session, Default::default()).await else {
+        return Ok(None);
+    };
+    let target = stream.map(|stream| RegionTarget {
+        mapping_id: selected
+            .streams()
+            .iter()
+            .find(|candidate| candidate.pipe_wire_node_id() == stream.node_id)
+            .and_then(|candidate| candidate.mapping_id())
+            .map(ToOwned::to_owned),
+        position: stream.position.unwrap_or_default(),
+        size: (stream.width, stream.height),
+    });
+    match timeout(EIS_SETUP_TIMEOUT, EisInput::connect(fd, target)).await {
+        Ok(Ok(eis)) => Ok(Some(Box::new(eis))),
+        Ok(Err(EisError::NoRegion)) => Err(PortalError::MonitorUnverifiable),
+        Ok(Err(error)) => Err(PortalError::EisUnavailable(error)),
+        Err(_) => Err(PortalError::EventTimeout),
     }
 }
 
