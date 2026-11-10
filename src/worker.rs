@@ -1,5 +1,6 @@
 use std::{
     fmt, io,
+    ops::ControlFlow,
     pin::Pin,
     sync::{
         Arc,
@@ -701,38 +702,6 @@ async fn setup_hotkey(
     }
 }
 
-/// Cancel registration and close even a session completed just before cancellation.
-async fn cancel_hotkey(
-    task: &mut Option<JoinHandle<Result<HotkeyRegistration, HotkeyError>>>,
-    cancel: &mut Option<oneshot::Sender<()>>,
-) {
-    if let Some(cancel) = cancel.take() {
-        let _ = cancel.send(());
-    }
-    if let Some(task) = task.take()
-        && let Ok(Ok(registration)) = task.await
-    {
-        let _ = timeout(PORTAL_CLOSE_TIMEOUT, registration.session.close()).await;
-        let _ = timeout(PORTAL_CLOSE_TIMEOUT, registration.connection.close()).await;
-    }
-}
-
-/// Keep the owner alive until its pending dialog/session has been closed.
-async fn cancel_start(
-    task: &mut Option<JoinHandle<Result<StartedSession, Box<ClickError>>>>,
-    cancel: &mut Option<oneshot::Sender<()>>,
-) {
-    if let Some(cancel) = cancel.take() {
-        let _ = cancel.send(());
-    }
-    if let Some(task) = task.take()
-        && let Ok(Ok(started)) = task.await
-    {
-        // The permission may have completed just before cancellation.
-        started.session.close().await;
-    }
-}
-
 /// Create a portal session for the selected monitor or current cursor.
 async fn setup_click_session(
     settings: ClickSettings,
@@ -778,29 +747,6 @@ async fn wait_click_session_closed(session: &mut Option<PlatformClickSession>) {
         Some(session) => session.wait_closed().await,
         None => future::pending().await,
     }
-}
-
-/// Report whether an active or pending run ended with the closed session.
-async fn discard_closed_click_session(
-    session: &mut Option<PlatformClickSession>,
-    machine: &mut StateMachine,
-    active: &mut Option<ActiveRun>,
-    countdown: &mut Option<PendingCountdown>,
-    emit: &Emitter,
-) -> bool {
-    let was_running = stop_run(machine, active, countdown, emit);
-    if let Some(session) = session.take() {
-        session.close().await;
-    }
-    if was_running {
-        fail_run(machine, emit);
-        (emit)(WorkerEvent::Error(WorkerError::Click(
-            PlatformClickSession::closed_error(),
-        )));
-    } else {
-        (emit)(WorkerEvent::Status(WorkerStatus::PermissionRequired));
-    }
-    was_running
 }
 
 async fn wait_task<T>(task: &mut Option<JoinHandle<T>>) -> Result<T, tokio::task::JoinError> {
@@ -894,47 +840,104 @@ async fn next_wake(sources: WakeSources<'_>) -> Wake {
 
 /// Serialize clicks, permissions and shortcut events.
 async fn run_worker(
-    mut commands: mpsc::Receiver<QueuedCommand>,
-    mut control: watch::Receiver<Control>,
+    commands: mpsc::Receiver<QueuedCommand>,
+    control: watch::Receiver<Control>,
     emit: Emitter,
     closing: Arc<AtomicBool>,
     session_idle: Duration,
 ) {
-    let mut machine = StateMachine::default();
-    let mut click_session: Option<PlatformClickSession> = None;
-    let mut click_session_idle: Option<Instant> = None;
-    let mut active: Option<ActiveRun> = None;
-    let mut countdown: Option<PendingCountdown> = None;
-    let mut start_task: Option<JoinHandle<Result<StartedSession, Box<ClickError>>>> = None;
-    let mut start_cancel = None;
-    let mut start_request: Option<PendingStartRequest> = None;
-    let (tx, rx) = oneshot::channel();
-    let mut hotkey_cancel = Some(tx);
-    let mut hotkey_task = Some(tokio::spawn(setup_hotkey(rx)));
-    let mut configure_task: Option<JoinHandle<Result<(), HotkeyError>>> = None;
-    let mut hotkey: Option<HotkeyState> = None;
-    let mut hotkey_bound = false;
-
-    (emit)(WorkerEvent::State(machine.state()));
-    (emit)(WorkerEvent::Status(WorkerStatus::RegisteringHotkey));
-    (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Registering));
-    let mut ended_runs = machine.ended_runs();
-    let mut barrier_stops = control.borrow().stops;
-
+    let mut worker = Worker::new(commands, control, emit, session_idle);
     loop {
-        if machine.state() != RunState::Starting {
+        let wake = worker.wait().await;
+        if worker.handle(wake).await.is_break() {
+            break;
+        }
+    }
+    worker.close(&closing).await;
+}
+
+/// The worker loop's state. Each `Wake` has one handler; `Break` ends the loop.
+struct Worker {
+    commands: mpsc::Receiver<QueuedCommand>,
+    control: watch::Receiver<Control>,
+    emit: Emitter,
+    session_idle: Duration,
+    machine: StateMachine,
+    click_session: Option<PlatformClickSession>,
+    click_session_idle: Option<Instant>,
+    active: Option<ActiveRun>,
+    countdown: Option<PendingCountdown>,
+    start_task: Option<JoinHandle<Result<StartedSession, Box<ClickError>>>>,
+    start_cancel: Option<oneshot::Sender<()>>,
+    start_request: Option<PendingStartRequest>,
+    hotkey_cancel: Option<oneshot::Sender<()>>,
+    hotkey_task: Option<JoinHandle<Result<HotkeyRegistration, HotkeyError>>>,
+    configure_task: Option<JoinHandle<Result<(), HotkeyError>>>,
+    hotkey: Option<HotkeyState>,
+    hotkey_bound: bool,
+    /// Run ends and Stops the start barrier has seen.
+    ended_runs: u64,
+    barrier_stops: u64,
+}
+
+impl Worker {
+    /// Begin the hotkey registration and report the initial state.
+    fn new(
+        commands: mpsc::Receiver<QueuedCommand>,
+        control: watch::Receiver<Control>,
+        emit: Emitter,
+        session_idle: Duration,
+    ) -> Self {
+        let machine = StateMachine::default();
+        let (tx, rx) = oneshot::channel();
+        let hotkey_task = tokio::spawn(setup_hotkey(rx));
+        (emit)(WorkerEvent::State(machine.state()));
+        (emit)(WorkerEvent::Status(WorkerStatus::RegisteringHotkey));
+        (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Registering));
+        let ended_runs = machine.ended_runs();
+        let barrier_stops = control.borrow().stops;
+        Self {
+            commands,
+            control,
+            emit,
+            session_idle,
+            machine,
+            click_session: None,
+            click_session_idle: None,
+            active: None,
+            countdown: None,
+            start_task: None,
+            start_cancel: None,
+            start_request: None,
+            hotkey_cancel: Some(tx),
+            hotkey_task: Some(hotkey_task),
+            configure_task: None,
+            hotkey: None,
+            hotkey_bound: false,
+            ended_runs,
+            barrier_stops,
+        }
+    }
+
+    fn emit(&self, event: WorkerEvent) {
+        (self.emit)(event);
+    }
+
+    /// Update the start barrier and idle deadline, then wait for the next event.
+    async fn wait(&mut self) -> Wake {
+        if self.machine.state() != RunState::Starting {
             // Closing this receiver revokes even a reply already queued on Qt.
-            start_request = None;
+            self.start_request = None;
         }
         // A run ended, by Stop, key press, error or its last click, or a
         // Stop arrived without a run. Key presses the portal has sent up to
         // now may still be queued behind the busy worker. Ask for a new
         // boundary before reading the next one.
-        let stops = control.borrow().stops;
-        if machine.ended_runs() != ended_runs || stops != barrier_stops {
-            ended_runs = machine.ended_runs();
-            barrier_stops = stops;
-            if let Some(state) = hotkey.as_mut() {
+        let stops = self.control.borrow().stops;
+        if self.machine.ended_runs() != self.ended_runs || stops != self.barrier_stops {
+            self.ended_runs = self.machine.ended_runs();
+            self.barrier_stops = stops;
+            if let Some(state) = self.hotkey.as_mut() {
                 let portal = zbus::Proxy::clone(&state.portal);
                 let owner = state.portal_owner.clone();
                 state
@@ -943,375 +946,602 @@ async fn run_worker(
             }
         }
         // The idle time of the mouse permission starts when a run ends.
-        click_session_idle = if click_session.is_none()
-            || matches!(machine.state(), RunState::Starting | RunState::Clicking)
-        {
+        self.click_session_idle = if self.click_session.is_none() || self.is_running() {
             None
         } else {
-            click_session_idle.or_else(|| Some(Instant::now() + session_idle))
+            self.click_session_idle
+                .or_else(|| Some(Instant::now() + self.session_idle))
         };
-        let wake = next_wake(WakeSources {
-            control: &mut control,
-            click_session: &mut click_session,
-            commands: &mut commands,
-            start_request: &mut start_request,
-            start_task: &mut start_task,
-            hotkey_task: &mut hotkey_task,
-            configure_task: &mut configure_task,
-            hotkey: &mut hotkey,
-            countdown: countdown.as_ref().map(|pending| pending.next_tick),
-            tick: active.as_ref().map(|run| run.next_tick),
-            session_idle: click_session_idle,
+        next_wake(WakeSources {
+            control: &mut self.control,
+            click_session: &mut self.click_session,
+            commands: &mut self.commands,
+            start_request: &mut self.start_request,
+            start_task: &mut self.start_task,
+            hotkey_task: &mut self.hotkey_task,
+            configure_task: &mut self.configure_task,
+            hotkey: &mut self.hotkey,
+            countdown: self.countdown.as_ref().map(|pending| pending.next_tick),
+            tick: self.active.as_ref().map(|run| run.next_tick),
+            session_idle: self.click_session_idle,
         })
-        .await;
-        let wake = match wake {
-            Wake::StartReply(result) => {
-                let Some(request) = start_request.take() else {
-                    continue;
-                };
-                match result {
-                    Ok(settings) => Wake::Command(Some(QueuedCommand::Start {
-                        settings,
-                        stops: request.stops,
-                        from_button: false,
-                        reserved: true,
-                    })),
-                    Err(_) => {
-                        stop_run(&mut machine, &mut active, &mut countdown, &emit);
-                        continue;
-                    }
-                }
-            }
-            wake => wake,
-        };
-        #[rustfmt::skip]
-        let () = match wake {
-            Wake::Control(changed) => {
-                if changed.is_err() || control.borrow().shutdown {
-                    break;
-                }
-                cancel_start(&mut start_task, &mut start_cancel).await;
-                stop_run(&mut machine, &mut active, &mut countdown, &emit);
-            }
-            Wake::ClickSessionClosed => {
-                discard_closed_click_session(&mut click_session, &mut machine, &mut active, &mut countdown, &emit).await;
-            }
-            Wake::ClickSessionIdle => {
-                click_session_idle = None;
-                if let Some(session) = click_session.take() {
-                    session.close().await;
-                }
-            }
-            Wake::Command(command) => {
-                let Some(command) = command else { break; };
-                match command {
-                    QueuedCommand::Start { settings, stops, from_button, reserved } => {
-                        // A Stop may have arrived after this turn checked for one.
-                        // Handle it first, so it cannot cancel a start sent after it.
-                        match take_control_change(&mut control) {
-                            ControlChange::None => {}
-                            ControlChange::Stop => {
-                                cancel_start(&mut start_task, &mut start_cancel).await;
-                                stop_run(&mut machine, &mut active, &mut countdown, &emit);
-                            }
-                            ControlChange::Shutdown => break,
-                        }
-                        // A later Stop overtook this start in the queue.
-                        if is_outdated(stops, &control) {
-                            continue;
-                        }
-                        let delay = from_button && settings.position.is_none();
-                        if !hotkey_bound || configure_task.is_some() {
-                            (emit)(WorkerEvent::Error(WorkerError::HotkeyRequired));
-                            continue;
-                        }
-                        if click_session.as_mut().is_some_and(PlatformClickSession::is_closed)
-                            && discard_closed_click_session(&mut click_session, &mut machine, &mut active, &mut countdown, &emit).await
-                        {
-                            continue;
-                        }
-                        match request_validated_start(&mut machine, &settings, reserved) {
-                            Ok(true) => {
-                                (emit)(WorkerEvent::State(machine.state()));
-                            }
-                            Ok(false) => continue,
-                            Err(error) => {
-                                (emit)(WorkerEvent::State(machine.state()));
-                                (emit)(WorkerEvent::Error(WorkerError::InvalidSettings(error)));
-                                continue;
-                            }
-                        }
-                        if click_session.as_ref().is_some_and(|session| session.matches_monitor(settings.monitor)) {
-                            begin_run(&mut machine, &mut active, &mut countdown, settings, delay, &emit);
-                        } else {
-                            if let Some(old_session) = click_session.take() {
-                                old_session.close().await;
-                            }
-                            (emit)(WorkerEvent::Status(WorkerStatus::AwaitingClickPermission));
-                            let (tx, rx) = oneshot::channel();
-                            start_cancel = Some(tx);
-                            start_task = Some(tokio::spawn(setup_click_session(settings, delay, rx)));
-                        }
-                    }
-                    QueuedCommand::ConfigureHotkey => {
-                        if configure_task.is_some() || hotkey_task.is_some() {
-                            continue;
-                        }
-                        // ConfigureShortcuts requires v2. On v1 only the system settings
-                        // can change a bound hotkey, and the GUI points there, so keep
-                        // the binding and a pending start. An unbound v1 session can
-                        // only recover through a fresh BindShortcuts.
-                        let v1 = hotkey.as_ref().is_some_and(|state| state.portal.version() < 2);
-                        if hotkey_bound && v1 {
-                            continue;
-                        }
-                        if start_request.take().is_some() {
-                            stop_run(&mut machine, &mut active, &mut countdown, &emit);
-                        }
-                        if v1 && let Some(state) = hotkey.take() {
-                            let _ = timeout(PORTAL_CLOSE_TIMEOUT, state.session.close()).await;
-                            let _ = timeout(PORTAL_CLOSE_TIMEOUT, state.connection.close()).await;
-                        }
-                        if let Some(state) = &hotkey {
-                            let portal = Arc::clone(&state.portal);
-                            let session = Arc::clone(&state.session);
-                            (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Configuring(hotkey_bound)));
-                            configure_task = Some(tokio::spawn(async move {
-                                let parent = parent_window::identifier().await;
-                                portal
-                                    .configure_shortcuts(
-                                        &session,
-                                        parent.as_ref(),
-                                        ConfigureShortcutsOptions::default(),
-                                    )
-                                    .await
-                                    .map_err(hotkey_settings_error)
-                            }));
-                        } else {
-                            let (tx, rx) = oneshot::channel();
-                            hotkey_cancel = Some(tx);
-                            hotkey_task = Some(tokio::spawn(setup_hotkey(rx)));
-                            (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Registering));
-                            (emit)(WorkerEvent::Status(WorkerStatus::RegisteringHotkey));
-                        }
-                    }
-                }
-            }
-            Wake::StartTask(result) => {
-                start_task = None;
-                start_cancel = None;
-                match result {
-                    Ok(Ok(StartedSession { mut session, settings, delay })) => {
-                        if session.is_closed() {
-                            session.close().await;
-                            fail_run(&mut machine, &emit);
-                            (emit)(WorkerEvent::Error(WorkerError::Click(PlatformClickSession::closed_error())));
-                        } else {
-                            click_session = Some(session);
-                            begin_run(&mut machine, &mut active, &mut countdown, settings, delay, &emit);
-                        }
-                    }
-                    Ok(Err(error)) => {
-                        fail_run(&mut machine, &emit);
-                        (emit)(WorkerEvent::Error(WorkerError::Click(*error)));
-                    }
-                    Err(error) if error.is_cancelled() => {
-                        stop_run(&mut machine, &mut active, &mut countdown, &emit);
-                    }
-                    Err(error) => {
-                        fail_run(&mut machine, &emit);
-                        (emit)(WorkerEvent::Error(WorkerError::ClickTaskFailed(error.to_string())));
-                    }
-                }
-            }
-            Wake::HotkeyTask(result) => {
-                hotkey_task = None;
-                hotkey_cancel = None;
-                match result {
-                    Ok(Ok(HotkeyRegistration { connection, portal, session, portal_owner, closed, mut signals, mut actual })) => {
-                        // Apply changes received so far right before Ready allows a start.
-                        // A press before Ready never starts a run, as before the early subscription.
-                        while let Some(Some(signal)) = signals.next().now_or_never() {
-                            if let HotkeySignal::Changed(changed) = signal {
-                                actual = bound_trigger(changed.shortcuts());
-                            }
-                        }
-                        let events = futures_util::stream::select(signals, futures_util::stream::once(closed));
-                        (emit)(WorkerEvent::HotkeyConfigurable(portal.version() >= 2));
-                        hotkey = Some(HotkeyState {
-                            connection,
-                            portal: Arc::new(portal),
-                            session,
-                            events: Box::pin(events),
-                            portal_owner,
-                            start_barrier: StartBarrier::new(),
-                        });
-                        if let Some(actual) = actual {
-                            hotkey_bound = true;
-                            (emit)(WorkerEvent::Hotkey(actual));
-                            (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Ready));
-                            if matches!(machine.state(), RunState::Ready | RunState::Stopped | RunState::Error) {
-                                (emit)(WorkerEvent::Status(WorkerStatus::Ready));
-                            }
-                        } else {
-                            hotkey_bound = false;
-                            (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable));
-                            (emit)(WorkerEvent::Error(WorkerError::Hotkey(HotkeyError::Unbound)));
-                        }
-                    }
-                    Ok(Err(error)) => {
-                        (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable));
-                        (emit)(WorkerEvent::Error(WorkerError::Hotkey(error)));
-                    }
-                    Err(error) if !error.is_cancelled() => {
-                        (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable));
-                        (emit)(WorkerEvent::Error(WorkerError::Hotkey(HotkeyError::Setup(error.to_string()))));
-                    }
-                    Err(_) => (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable)),
-                }
-            }
-            Wake::ConfigureTask(result) => {
-                configure_task = None;
-                // ConfigureShortcuts only acknowledges the method call. The portal
-                // does not report when its settings window is closed.
-                (emit)(WorkerEvent::HotkeyPhase(if hotkey_bound { HotkeyPhase::Ready } else { HotkeyPhase::Unavailable }));
-                match result {
-                    Ok(Ok(())) if hotkey_bound && !matches!(machine.state(), RunState::Starting | RunState::Clicking) => {
-                        (emit)(WorkerEvent::Status(WorkerStatus::Ready));
-                    }
-                    Ok(Ok(())) if !hotkey_bound => {
-                        (emit)(WorkerEvent::Status(WorkerStatus::AwaitingHotkey));
-                    }
-                    Ok(Ok(())) => {}
-                    Ok(Err(error)) => {
-                        cancel_start(&mut start_task, &mut start_cancel).await;
-                        abort_run(&mut machine, &mut active, &mut countdown, &emit);
-                        (emit)(WorkerEvent::Error(WorkerError::Hotkey(error)));
-                    }
-                    Err(error) if !error.is_cancelled() => {
-                        cancel_start(&mut start_task, &mut start_cancel).await;
-                        abort_run(&mut machine, &mut active, &mut countdown, &emit);
-                        (emit)(WorkerEvent::Error(WorkerError::Hotkey(hotkey_settings_error(error))));
-                    }
-                    Err(_) => {}
-                }
-            }
-            Wake::Hotkey(hotkey_event) => {
-                match hotkey_event {
-                    Some(HotkeySignal::Activated(activation, received)) if activation.shortcut_id() == HOTKEY_ID && hotkey_bound => {
-                        if matches!(machine.state(), RunState::Starting | RunState::Clicking) {
-                            // Any press stops, also one from before the latest run end.
-                            cancel_start(&mut start_task, &mut start_cancel).await;
-                            stop_run(&mut machine, &mut active, &mut countdown, &emit);
-                        } else if configure_task.is_none()
-                            && hotkey.as_mut().is_some_and(|state| !state.start_barrier.is_old(received))
-                        {
-                            // Reserve Starting before asking Qt for current controls, so
-                            // a second press toggles off even while Qt is still busy.
-                            if machine.request_start() {
-                                let (request, response) = StartRequest::channel();
-                                start_request = Some(PendingStartRequest {
-                                    reply: response,
-                                    stops: control.borrow().stops,
-                                });
-                                (emit)(WorkerEvent::State(machine.state()));
-                                (emit)(WorkerEvent::StartRequested(request));
-                            }
-                        }
-                    }
-                    Some(HotkeySignal::Changed(changed)) => {
-                        if let Some(trigger) = bound_trigger(changed.shortcuts()) {
-                            // A reply for the previous shortcut configuration cannot start.
-                            if start_request.take().is_some() {
-                                stop_run(&mut machine, &mut active, &mut countdown, &emit);
-                            }
-                            hotkey_bound = true;
-                            (emit)(WorkerEvent::Hotkey(trigger));
-                            (emit)(WorkerEvent::HotkeyPhase(if configure_task.is_some() { HotkeyPhase::Configuring(true) } else { HotkeyPhase::Ready }));
-                            if configure_task.is_none() && !matches!(machine.state(), RunState::Starting | RunState::Clicking) {
-                                (emit)(WorkerEvent::Status(WorkerStatus::Ready));
-                            }
-                        } else {
-                            cancel_start(&mut start_task, &mut start_cancel).await;
-                            abort_run(&mut machine, &mut active, &mut countdown, &emit);
-                            hotkey_bound = false;
-                            (emit)(WorkerEvent::HotkeyPhase(if configure_task.is_some() { HotkeyPhase::Configuring(false) } else { HotkeyPhase::Unavailable }));
-                            (emit)(WorkerEvent::Error(WorkerError::Hotkey(HotkeyError::Removed)));
-                        }
-                    }
-                    Some(HotkeySignal::Activated(..)) => {}
-                    Some(HotkeySignal::Closed) | None => {
-                        cancel_start(&mut start_task, &mut start_cancel).await;
-                        abort_run(&mut machine, &mut active, &mut countdown, &emit);
-                        if let Some(task) = configure_task.take() { task.abort(); }
-                        hotkey_bound = false;
-                        (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable));
-                        (emit)(WorkerEvent::Error(WorkerError::Hotkey(HotkeyError::SessionClosed)));
-                        if let Some(state) = hotkey.take() {
-                            let _ = timeout(PORTAL_CLOSE_TIMEOUT, state.connection.close()).await;
-                        }
-                    }
-                }
-            }
-            Wake::StartReply(_) => unreachable!("GUI replies are handled before commands"),
-            Wake::CountdownTick => {
-                let Some(pending) = countdown.as_mut() else { continue; };
-                if pending.remaining > 1 {
-                    pending.remaining -= 1;
-                    pending.next_tick += Duration::from_secs(1);
-                    (emit)(WorkerEvent::Countdown(pending.remaining));
-                } else {
-                    let Some(settings) = countdown.take().map(|pending| pending.settings) else {
-                        continue;
-                    };
-                    start_run(&mut machine, &mut active, settings, &emit);
-                }
-            }
-            Wake::ClickTick => {
-                let Some(run) = active.as_mut() else { continue; };
-                let Some(session) = click_session.as_mut() else {
-                    fail_run(&mut machine, &emit);
-                    active = None;
-                    (emit)(WorkerEvent::Error(WorkerError::ClickSessionLost));
-                    continue;
-                };
-                if !run.schedule.record_tick() {
-                    stop_run(&mut machine, &mut active, &mut countdown, &emit);
-                    continue;
-                }
-                if let Err(error) = session.click(&run.settings).await {
-                    fail_run(&mut machine, &emit);
-                    active = None;
-                    (emit)(WorkerEvent::Error(WorkerError::Click(error)));
-                    // A revoked or failed session cannot safely be reused on retry.
-                    if let Some(failed_session) = click_session.take() {
-                        failed_session.close().await;
-                    }
-                    continue;
-                }
-                if run.schedule.is_finished() {
-                    stop_run(&mut machine, &mut active, &mut countdown, &emit);
-                } else {
-                    run.next_tick = run.schedule.next_deadline(run.next_tick, Instant::now());
-                }
-            }
-        };
+        .await
     }
 
-    machine.close();
-    (emit)(WorkerEvent::State(machine.state()));
-    closing.store(true, Ordering::Release);
-    cancel_start(&mut start_task, &mut start_cancel).await;
-    cancel_hotkey(&mut hotkey_task, &mut hotkey_cancel).await;
-    if let Some(task) = configure_task {
-        task.abort();
+    async fn handle(&mut self, wake: Wake) -> ControlFlow<()> {
+        match wake {
+            Wake::Control(changed) => return self.on_control(changed).await,
+            Wake::ClickSessionClosed => {
+                self.discard_closed_click_session().await;
+            }
+            Wake::ClickSessionIdle => self.on_click_session_idle().await,
+            Wake::Command(None) => return ControlFlow::Break(()),
+            Wake::Command(Some(QueuedCommand::Start {
+                settings,
+                stops,
+                from_button,
+                reserved,
+            })) => return self.on_start(settings, stops, from_button, reserved).await,
+            Wake::Command(Some(QueuedCommand::ConfigureHotkey)) => {
+                self.on_configure_hotkey().await;
+            }
+            Wake::StartReply(result) => return self.on_start_reply(result).await,
+            Wake::StartTask(result) => self.on_start_task(result).await,
+            Wake::HotkeyTask(result) => self.on_hotkey_task(result),
+            Wake::ConfigureTask(result) => self.on_configure_task(result).await,
+            Wake::Hotkey(signal) => self.on_hotkey(signal).await,
+            Wake::CountdownTick => self.on_countdown_tick(),
+            Wake::ClickTick => self.on_click_tick().await,
+        }
+        ControlFlow::Continue(())
     }
-    if let Some(session) = click_session {
-        session.close().await;
+
+    fn is_running(&self) -> bool {
+        matches!(
+            self.machine.state(),
+            RunState::Starting | RunState::Clicking
+        )
     }
-    if let Some(state) = hotkey {
-        let _ = timeout(PORTAL_CLOSE_TIMEOUT, state.session.close()).await;
-        let _ = timeout(PORTAL_CLOSE_TIMEOUT, state.connection.close()).await;
+
+    /// Stop or Shutdown, which overtake every queued command.
+    async fn on_control(
+        &mut self,
+        changed: Result<(), watch::error::RecvError>,
+    ) -> ControlFlow<()> {
+        if changed.is_err() || self.control.borrow().shutdown {
+            return ControlFlow::Break(());
+        }
+        self.cancel_start().await;
+        self.stop_run();
+        ControlFlow::Continue(())
+    }
+
+    async fn on_click_session_idle(&mut self) {
+        self.click_session_idle = None;
+        if let Some(session) = self.click_session.take() {
+            session.close().await;
+        }
+    }
+
+    /// Qt's reply to a reserved hotkey start, or its refusal.
+    async fn on_start_reply(
+        &mut self,
+        result: Result<ClickSettings, oneshot::error::RecvError>,
+    ) -> ControlFlow<()> {
+        let Some(request) = self.start_request.take() else {
+            return ControlFlow::Continue(());
+        };
+        match result {
+            Ok(settings) => self.on_start(settings, request.stops, false, true).await,
+            Err(_) => {
+                self.stop_run();
+                ControlFlow::Continue(())
+            }
+        }
+    }
+
+    async fn on_start(
+        &mut self,
+        settings: ClickSettings,
+        stops: u64,
+        from_button: bool,
+        reserved: bool,
+    ) -> ControlFlow<()> {
+        // A Stop may have arrived after this turn checked for one.
+        // Handle it first, so it cannot cancel a start sent after it.
+        match take_control_change(&mut self.control) {
+            ControlChange::None => {}
+            ControlChange::Stop => {
+                self.cancel_start().await;
+                self.stop_run();
+            }
+            ControlChange::Shutdown => return ControlFlow::Break(()),
+        }
+        // A later Stop overtook this start in the queue.
+        if is_outdated(stops, &self.control) {
+            return ControlFlow::Continue(());
+        }
+        let delay = from_button && settings.position.is_none();
+        if !self.hotkey_bound || self.configure_task.is_some() {
+            self.emit(WorkerEvent::Error(WorkerError::HotkeyRequired));
+            return ControlFlow::Continue(());
+        }
+        if self
+            .click_session
+            .as_mut()
+            .is_some_and(PlatformClickSession::is_closed)
+            && self.discard_closed_click_session().await
+        {
+            return ControlFlow::Continue(());
+        }
+        match request_validated_start(&mut self.machine, &settings, reserved) {
+            Ok(true) => {
+                self.emit(WorkerEvent::State(self.machine.state()));
+            }
+            Ok(false) => return ControlFlow::Continue(()),
+            Err(error) => {
+                self.emit(WorkerEvent::State(self.machine.state()));
+                self.emit(WorkerEvent::Error(WorkerError::InvalidSettings(error)));
+                return ControlFlow::Continue(());
+            }
+        }
+        if self
+            .click_session
+            .as_ref()
+            .is_some_and(|session| session.matches_monitor(settings.monitor))
+        {
+            self.begin_run(settings, delay);
+        } else {
+            if let Some(old_session) = self.click_session.take() {
+                old_session.close().await;
+            }
+            self.emit(WorkerEvent::Status(WorkerStatus::AwaitingClickPermission));
+            let (tx, rx) = oneshot::channel();
+            self.start_cancel = Some(tx);
+            self.start_task = Some(tokio::spawn(setup_click_session(settings, delay, rx)));
+        }
+        ControlFlow::Continue(())
+    }
+
+    async fn on_configure_hotkey(&mut self) {
+        if self.configure_task.is_some() || self.hotkey_task.is_some() {
+            return;
+        }
+        // ConfigureShortcuts requires v2. On v1 only the system settings
+        // can change a bound hotkey, and the GUI points there, so keep
+        // the binding and a pending start. An unbound v1 session can
+        // only recover through a fresh BindShortcuts.
+        let v1 = self
+            .hotkey
+            .as_ref()
+            .is_some_and(|state| state.portal.version() < 2);
+        if self.hotkey_bound && v1 {
+            return;
+        }
+        if self.start_request.take().is_some() {
+            self.stop_run();
+        }
+        if v1 && let Some(state) = self.hotkey.take() {
+            let _ = timeout(PORTAL_CLOSE_TIMEOUT, state.session.close()).await;
+            let _ = timeout(PORTAL_CLOSE_TIMEOUT, state.connection.close()).await;
+        }
+        if let Some(state) = &self.hotkey {
+            let portal = Arc::clone(&state.portal);
+            let session = Arc::clone(&state.session);
+            self.emit(WorkerEvent::HotkeyPhase(HotkeyPhase::Configuring(
+                self.hotkey_bound,
+            )));
+            self.configure_task = Some(tokio::spawn(async move {
+                let parent = parent_window::identifier().await;
+                portal
+                    .configure_shortcuts(
+                        &session,
+                        parent.as_ref(),
+                        ConfigureShortcutsOptions::default(),
+                    )
+                    .await
+                    .map_err(hotkey_settings_error)
+            }));
+        } else {
+            let (tx, rx) = oneshot::channel();
+            self.hotkey_cancel = Some(tx);
+            self.hotkey_task = Some(tokio::spawn(setup_hotkey(rx)));
+            self.emit(WorkerEvent::HotkeyPhase(HotkeyPhase::Registering));
+            self.emit(WorkerEvent::Status(WorkerStatus::RegisteringHotkey));
+        }
+    }
+
+    /// The mouse permission for a start was granted, refused or cancelled.
+    async fn on_start_task(
+        &mut self,
+        result: Result<Result<StartedSession, Box<ClickError>>, tokio::task::JoinError>,
+    ) {
+        self.start_task = None;
+        self.start_cancel = None;
+        match result {
+            Ok(Ok(StartedSession {
+                mut session,
+                settings,
+                delay,
+            })) => {
+                if session.is_closed() {
+                    session.close().await;
+                    self.fail_run();
+                    self.emit(WorkerEvent::Error(WorkerError::Click(
+                        PlatformClickSession::closed_error(),
+                    )));
+                } else {
+                    self.click_session = Some(session);
+                    self.begin_run(settings, delay);
+                }
+            }
+            Ok(Err(error)) => {
+                self.fail_run();
+                self.emit(WorkerEvent::Error(WorkerError::Click(*error)));
+            }
+            Err(error) if error.is_cancelled() => {
+                self.stop_run();
+            }
+            Err(error) => {
+                self.fail_run();
+                self.emit(WorkerEvent::Error(WorkerError::ClickTaskFailed(
+                    error.to_string(),
+                )));
+            }
+        }
+    }
+
+    fn on_hotkey_task(
+        &mut self,
+        result: Result<Result<HotkeyRegistration, HotkeyError>, tokio::task::JoinError>,
+    ) {
+        self.hotkey_task = None;
+        self.hotkey_cancel = None;
+        match result {
+            Ok(Ok(HotkeyRegistration {
+                connection,
+                portal,
+                session,
+                portal_owner,
+                closed,
+                mut signals,
+                mut actual,
+            })) => {
+                // Apply changes received so far right before Ready allows a start.
+                // A press before Ready never starts a run, as before the early subscription.
+                while let Some(Some(signal)) = signals.next().now_or_never() {
+                    if let HotkeySignal::Changed(changed) = signal {
+                        actual = bound_trigger(changed.shortcuts());
+                    }
+                }
+                let events =
+                    futures_util::stream::select(signals, futures_util::stream::once(closed));
+                self.emit(WorkerEvent::HotkeyConfigurable(portal.version() >= 2));
+                self.hotkey = Some(HotkeyState {
+                    connection,
+                    portal: Arc::new(portal),
+                    session,
+                    events: Box::pin(events),
+                    portal_owner,
+                    start_barrier: StartBarrier::new(),
+                });
+                if let Some(actual) = actual {
+                    self.hotkey_bound = true;
+                    self.emit(WorkerEvent::Hotkey(actual));
+                    self.emit(WorkerEvent::HotkeyPhase(HotkeyPhase::Ready));
+                    if matches!(
+                        self.machine.state(),
+                        RunState::Ready | RunState::Stopped | RunState::Error
+                    ) {
+                        self.emit(WorkerEvent::Status(WorkerStatus::Ready));
+                    }
+                } else {
+                    self.hotkey_bound = false;
+                    self.emit(WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable));
+                    self.emit(WorkerEvent::Error(WorkerError::Hotkey(
+                        HotkeyError::Unbound,
+                    )));
+                }
+            }
+            Ok(Err(error)) => {
+                self.emit(WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable));
+                self.emit(WorkerEvent::Error(WorkerError::Hotkey(error)));
+            }
+            Err(error) if !error.is_cancelled() => {
+                self.emit(WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable));
+                self.emit(WorkerEvent::Error(WorkerError::Hotkey(HotkeyError::Setup(
+                    error.to_string(),
+                ))));
+            }
+            Err(_) => self.emit(WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable)),
+        }
+    }
+
+    async fn on_configure_task(
+        &mut self,
+        result: Result<Result<(), HotkeyError>, tokio::task::JoinError>,
+    ) {
+        self.configure_task = None;
+        // ConfigureShortcuts only acknowledges the method call. The portal
+        // does not report when its settings window is closed.
+        self.emit(WorkerEvent::HotkeyPhase(if self.hotkey_bound {
+            HotkeyPhase::Ready
+        } else {
+            HotkeyPhase::Unavailable
+        }));
+        match result {
+            Ok(Ok(())) if self.hotkey_bound && !self.is_running() => {
+                self.emit(WorkerEvent::Status(WorkerStatus::Ready));
+            }
+            Ok(Ok(())) if !self.hotkey_bound => {
+                self.emit(WorkerEvent::Status(WorkerStatus::AwaitingHotkey));
+            }
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                self.cancel_start().await;
+                self.abort_run();
+                self.emit(WorkerEvent::Error(WorkerError::Hotkey(error)));
+            }
+            Err(error) if !error.is_cancelled() => {
+                self.cancel_start().await;
+                self.abort_run();
+                self.emit(WorkerEvent::Error(WorkerError::Hotkey(
+                    hotkey_settings_error(error),
+                )));
+            }
+            Err(_) => {}
+        }
+    }
+
+    async fn on_hotkey(&mut self, signal: Option<HotkeySignal>) {
+        match signal {
+            Some(HotkeySignal::Activated(activation, received))
+                if activation.shortcut_id() == HOTKEY_ID && self.hotkey_bound =>
+            {
+                self.on_hotkey_pressed(received).await;
+            }
+            Some(HotkeySignal::Changed(changed)) => {
+                self.on_hotkey_changed(bound_trigger(changed.shortcuts()))
+                    .await;
+            }
+            Some(HotkeySignal::Activated(..)) => {}
+            Some(HotkeySignal::Closed) | None => self.on_hotkey_closed().await,
+        }
+    }
+
+    /// Toggle: stop a run, or reserve a start behind the start barrier.
+    async fn on_hotkey_pressed(&mut self, received: Sequence) {
+        if self.is_running() {
+            // Any press stops, also one from before the latest run end.
+            self.cancel_start().await;
+            self.stop_run();
+        } else if self.configure_task.is_none()
+            && self
+                .hotkey
+                .as_mut()
+                .is_some_and(|state| !state.start_barrier.is_old(received))
+        {
+            // Reserve Starting before asking Qt for current controls, so
+            // a second press toggles off even while Qt is still busy.
+            if self.machine.request_start() {
+                let (request, response) = StartRequest::channel();
+                self.start_request = Some(PendingStartRequest {
+                    reply: response,
+                    stops: self.control.borrow().stops,
+                });
+                self.emit(WorkerEvent::State(self.machine.state()));
+                self.emit(WorkerEvent::StartRequested(request));
+            }
+        }
+    }
+
+    async fn on_hotkey_changed(&mut self, trigger: Option<String>) {
+        if let Some(trigger) = trigger {
+            // A reply for the previous shortcut configuration cannot start.
+            if self.start_request.take().is_some() {
+                self.stop_run();
+            }
+            self.hotkey_bound = true;
+            self.emit(WorkerEvent::Hotkey(trigger));
+            self.emit(WorkerEvent::HotkeyPhase(if self.configure_task.is_some() {
+                HotkeyPhase::Configuring(true)
+            } else {
+                HotkeyPhase::Ready
+            }));
+            if self.configure_task.is_none() && !self.is_running() {
+                self.emit(WorkerEvent::Status(WorkerStatus::Ready));
+            }
+        } else {
+            self.cancel_start().await;
+            self.abort_run();
+            self.hotkey_bound = false;
+            self.emit(WorkerEvent::HotkeyPhase(if self.configure_task.is_some() {
+                HotkeyPhase::Configuring(false)
+            } else {
+                HotkeyPhase::Unavailable
+            }));
+            self.emit(WorkerEvent::Error(WorkerError::Hotkey(
+                HotkeyError::Removed,
+            )));
+        }
+    }
+
+    async fn on_hotkey_closed(&mut self) {
+        self.cancel_start().await;
+        self.abort_run();
+        if let Some(task) = self.configure_task.take() {
+            task.abort();
+        }
+        self.hotkey_bound = false;
+        self.emit(WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable));
+        self.emit(WorkerEvent::Error(WorkerError::Hotkey(
+            HotkeyError::SessionClosed,
+        )));
+        if let Some(state) = self.hotkey.take() {
+            let _ = timeout(PORTAL_CLOSE_TIMEOUT, state.connection.close()).await;
+        }
+    }
+
+    fn on_countdown_tick(&mut self) {
+        let Some(pending) = self.countdown.as_mut() else {
+            return;
+        };
+        if pending.remaining > 1 {
+            pending.remaining -= 1;
+            pending.next_tick += Duration::from_secs(1);
+            let remaining = pending.remaining;
+            self.emit(WorkerEvent::Countdown(remaining));
+        } else {
+            let Some(settings) = self.countdown.take().map(|pending| pending.settings) else {
+                return;
+            };
+            self.start_run(settings);
+        }
+    }
+
+    async fn on_click_tick(&mut self) {
+        let Some(run) = self.active.as_mut() else {
+            return;
+        };
+        let Some(session) = self.click_session.as_mut() else {
+            self.fail_run();
+            self.active = None;
+            self.emit(WorkerEvent::Error(WorkerError::ClickSessionLost));
+            return;
+        };
+        if !run.schedule.record_tick() {
+            self.stop_run();
+            return;
+        }
+        if let Err(error) = session.click(&run.settings).await {
+            self.fail_run();
+            self.active = None;
+            self.emit(WorkerEvent::Error(WorkerError::Click(error)));
+            // A revoked or failed session cannot safely be reused on retry.
+            if let Some(failed_session) = self.click_session.take() {
+                failed_session.close().await;
+            }
+            return;
+        }
+        if run.schedule.is_finished() {
+            self.stop_run();
+        } else {
+            run.next_tick = run.schedule.next_deadline(run.next_tick, Instant::now());
+        }
+    }
+
+    /// Keep the owner alive until its pending dialog/session has been closed.
+    async fn cancel_start(&mut self) {
+        if let Some(cancel) = self.start_cancel.take() {
+            let _ = cancel.send(());
+        }
+        if let Some(task) = self.start_task.take()
+            && let Ok(Ok(started)) = task.await
+        {
+            // The permission may have completed just before cancellation.
+            started.session.close().await;
+        }
+    }
+
+    /// Cancel registration and close even a session completed just before cancellation.
+    async fn cancel_hotkey(&mut self) {
+        if let Some(cancel) = self.hotkey_cancel.take() {
+            let _ = cancel.send(());
+        }
+        if let Some(task) = self.hotkey_task.take()
+            && let Ok(Ok(registration)) = task.await
+        {
+            let _ = timeout(PORTAL_CLOSE_TIMEOUT, registration.session.close()).await;
+            let _ = timeout(PORTAL_CLOSE_TIMEOUT, registration.connection.close()).await;
+        }
+    }
+
+    /// Report whether an active or pending run ended with the closed session.
+    async fn discard_closed_click_session(&mut self) -> bool {
+        let was_running = self.stop_run();
+        if let Some(session) = self.click_session.take() {
+            session.close().await;
+        }
+        if was_running {
+            self.fail_run();
+            self.emit(WorkerEvent::Error(WorkerError::Click(
+                PlatformClickSession::closed_error(),
+            )));
+        } else {
+            self.emit(WorkerEvent::Status(WorkerStatus::PermissionRequired));
+        }
+        was_running
+    }
+
+    fn fail_run(&mut self) {
+        self.machine.fail();
+        self.emit(WorkerEvent::State(self.machine.state()));
+    }
+
+    fn start_run(&mut self, settings: ClickSettings) {
+        if !self.machine.started() {
+            return;
+        }
+        let schedule = Schedule::new(settings.interval(), settings.repeat);
+        self.active = Some(ActiveRun {
+            settings,
+            schedule,
+            next_tick: Instant::now(),
+        });
+        self.emit(WorkerEvent::State(self.machine.state()));
+        self.emit(WorkerEvent::Status(WorkerStatus::Clicking));
+    }
+
+    /// Start clicking now, or first give the user a cancellable countdown.
+    fn begin_run(&mut self, settings: ClickSettings, delay: bool) {
+        if delay {
+            self.countdown = Some(PendingCountdown {
+                settings,
+                remaining: BUTTON_START_DELAY_SECS,
+                next_tick: Instant::now() + Duration::from_secs(1),
+            });
+            self.emit(WorkerEvent::Countdown(BUTTON_START_DELAY_SECS));
+        } else {
+            self.start_run(settings);
+        }
+    }
+
+    /// Report whether an active or pending run, including its countdown, was stopped.
+    fn stop_run(&mut self) -> bool {
+        if !self.machine.stop() {
+            return false;
+        }
+        self.active = None;
+        self.countdown = None;
+        self.emit(WorkerEvent::State(self.machine.state()));
+        self.emit(WorkerEvent::Status(WorkerStatus::Stopped));
+        true
+    }
+
+    /// Fail only an active or pending run; hotkey problems use `HotkeyPhase` instead.
+    fn abort_run(&mut self) {
+        if self.stop_run() {
+            self.fail_run();
+        }
+    }
+
+    /// Mark the worker closed, then cancel pending requests and close the sessions.
+    async fn close(mut self, closing: &AtomicBool) {
+        self.machine.close();
+        self.emit(WorkerEvent::State(self.machine.state()));
+        closing.store(true, Ordering::Release);
+        self.cancel_start().await;
+        self.cancel_hotkey().await;
+        if let Some(task) = self.configure_task.take() {
+            task.abort();
+        }
+        if let Some(session) = self.click_session.take() {
+            session.close().await;
+        }
+        if let Some(state) = self.hotkey.take() {
+            let _ = timeout(PORTAL_CLOSE_TIMEOUT, state.session.close()).await;
+            let _ = timeout(PORTAL_CLOSE_TIMEOUT, state.connection.close()).await;
+        }
     }
 }
 
@@ -1328,11 +1558,6 @@ fn take_control_change(control: &mut watch::Receiver<Control>) -> ControlChange 
 /// A start sent before the latest Stop must not run after it.
 fn is_outdated(stops: u64, control: &watch::Receiver<Control>) -> bool {
     stops != control.borrow().stops
-}
-
-fn fail_run(machine: &mut StateMachine, emit: &Emitter) {
-    machine.fail();
-    (emit)(WorkerEvent::State(machine.state()));
 }
 
 /// Ignore duplicate starts before they can change a run or its pending settings.
@@ -1354,75 +1579,6 @@ fn request_validated_start(
         return Err(error);
     }
     Ok(true)
-}
-
-fn start_run(
-    machine: &mut StateMachine,
-    active: &mut Option<ActiveRun>,
-    settings: ClickSettings,
-    emit: &Emitter,
-) {
-    if !machine.started() {
-        return;
-    }
-    let schedule = Schedule::new(settings.interval(), settings.repeat);
-    *active = Some(ActiveRun {
-        settings,
-        schedule,
-        next_tick: Instant::now(),
-    });
-    (emit)(WorkerEvent::State(machine.state()));
-    (emit)(WorkerEvent::Status(WorkerStatus::Clicking));
-}
-
-/// Start clicking now, or first give the user a cancellable countdown.
-fn begin_run(
-    machine: &mut StateMachine,
-    active: &mut Option<ActiveRun>,
-    countdown: &mut Option<PendingCountdown>,
-    settings: ClickSettings,
-    delay: bool,
-    emit: &Emitter,
-) {
-    if delay {
-        *countdown = Some(PendingCountdown {
-            settings,
-            remaining: BUTTON_START_DELAY_SECS,
-            next_tick: Instant::now() + Duration::from_secs(1),
-        });
-        (emit)(WorkerEvent::Countdown(BUTTON_START_DELAY_SECS));
-    } else {
-        start_run(machine, active, settings, emit);
-    }
-}
-
-/// Report whether an active or pending run, including its countdown, was stopped.
-fn stop_run(
-    machine: &mut StateMachine,
-    active: &mut Option<ActiveRun>,
-    countdown: &mut Option<PendingCountdown>,
-    emit: &Emitter,
-) -> bool {
-    if !machine.stop() {
-        return false;
-    }
-    *active = None;
-    *countdown = None;
-    (emit)(WorkerEvent::State(machine.state()));
-    (emit)(WorkerEvent::Status(WorkerStatus::Stopped));
-    true
-}
-
-/// Fail only an active or pending run; hotkey problems use `HotkeyPhase` instead.
-fn abort_run(
-    machine: &mut StateMachine,
-    active: &mut Option<ActiveRun>,
-    countdown: &mut Option<PendingCountdown>,
-    emit: &Emitter,
-) {
-    if stop_run(machine, active, countdown, emit) {
-        fail_run(machine, emit);
-    }
 }
 
 /// The worker side of a handle, kept by a test so nothing drains the queue.
