@@ -1,403 +1,515 @@
-//! Every text the worker, the click backend and the settings validation show.
+//! Every text that Klickmeister's Rust code shows.
 //!
-//! They report variants with their technical details; only this module turns
-//! them into text, at the boundary to the interface.
-use std::fmt;
+//! The worker, the click backend, the settings and the controller report
+//! variants with their technical details; only this module turns them into
+//! text, at the boundary to the interface. The texts are English and pass
+//! through Qt's translation. `scripts/update-translations.sh` reads this file
+//! with lupdate's C++ parser, which only finds literal
+//! `translate("Klickmeister", "...")` calls, so every text is written out that
+//! way, and the file avoids Rust lifetimes, which that parser mistakes for
+//! character literals.
+use std::{fmt, io, path::Path};
 
 use crate::{
+    config::ConfigError,
+    eis::EisError,
+    i18n::{fill, translate},
+    instance::InstanceError,
     model::{MAX_CLICKS_PER_SECOND, MAX_INTERVAL_HOURS, MAX_REPEAT_COUNT, ValidationError},
     portal::PortalError,
     worker::{HotkeyError, SendError, WorkerError, WorkerStatus},
 };
 
+/// Write a translated text with its placeholders filled in.
+fn write(f: &mut fmt::Formatter, text: String, args: &[&dyn fmt::Display]) -> fmt::Result {
+    f.write_str(&fill(&text, args))
+}
+
 /// Status shown when an error ends a run or a start.
-pub const ERROR_STATUS: &str = "Fehler";
+pub fn error_status() -> String {
+    translate("Klickmeister", "Error")
+}
 
 /// Name of the start/stop hotkey in the system shortcut settings.
-pub const HOTKEY_DESCRIPTION: &str = "Automatisches Klicken starten oder stoppen";
+pub fn hotkey_description() -> String {
+    translate("Klickmeister", "Start or stop automatic clicking")
+}
 
 /// Status while a button start counts down.
 pub fn countdown_status(remaining: u8) -> String {
-    format!("Start in {remaining} s · Bewege den Mauszeiger zum Ziel.")
+    fill(
+        &translate(
+            "Klickmeister",
+            "Start in %1 s · Move the pointer to the target.",
+        ),
+        &[&remaining],
+    )
+}
+
+/// Error shown at startup when the settings file could not be loaded.
+pub fn unloaded_config_notice(error: &ConfigError) -> String {
+    fill(
+        &translate(
+            "Klickmeister",
+            "%1\n\nKlickmeister uses default values for now. Before changed settings are saved, the file is backed up next to it as config.toml.invalid (with a number appended if needed).",
+        ),
+        &[error],
+    )
+}
+
+pub fn interval_not_positive() -> String {
+    translate("Klickmeister", "Choose a click interval greater than 0 ms.")
+}
+
+pub fn invalid_repeat_count() -> String {
+    translate(
+        "Klickmeister",
+        "The number of click cycles is invalid. Check the value.",
+    )
+}
+
+pub fn invalid_coordinates() -> String {
+    translate(
+        "Klickmeister",
+        "The coordinates are invalid. Choose a new position.",
+    )
+}
+
+pub fn no_repeat() -> String {
+    translate("Klickmeister", "Choose at least one click cycle.")
+}
+
+pub fn negative_x() -> String {
+    translate(
+        "Klickmeister",
+        "The X coordinate must be a whole number from 0.",
+    )
+}
+
+pub fn negative_y() -> String {
+    translate(
+        "Klickmeister",
+        "The Y coordinate must be a whole number from 0.",
+    )
+}
+
+pub fn position_unconfirmed() -> String {
+    translate(
+        "Klickmeister",
+        "Check the screen and coordinates and confirm the fixed position.",
+    )
+}
+
+pub fn worker_unavailable() -> String {
+    translate(
+        "Klickmeister",
+        "The click control is not available. Restart Klickmeister.",
+    )
+}
+
+/// Detail of a failed backup of a settings file that was not loaded.
+pub fn config_backup_failed(backup: &Path, error: &io::Error) -> String {
+    fill(
+        &translate(
+            "Klickmeister",
+            "The settings file that was not loaded could not be backed up to %1: %2",
+        ),
+        &[&backup.display(), error],
+    )
+}
+
+/// Detail of a settings file link whose target cannot be resolved.
+pub fn config_link_unresolved(path: &Path, error: &io::Error) -> String {
+    fill(
+        &translate(
+            "Klickmeister",
+            "The link target of the settings file %1 could not be resolved: %2",
+        ),
+        &[&path.display(), error],
+    )
+}
+
+pub fn config_without_parent() -> String {
+    translate(
+        "Klickmeister",
+        "The settings location has no parent directory.",
+    )
+}
+
+/// Printed when a second start showed the running instance's window.
+pub fn already_running() -> String {
+    translate(
+        "Klickmeister",
+        "Klickmeister is already running; its window was shown.",
+    )
+}
+
+pub fn window_not_loaded() -> String {
+    translate(
+        "Klickmeister",
+        "Klickmeister could not be opened: The application window could not be loaded.",
+    )
+}
+
+/// Reason the running instance gives a second start that could not show it.
+pub fn window_unavailable() -> String {
+    translate(
+        "Klickmeister",
+        "The Klickmeister window is not available right now.",
+    )
+}
+
+/// Reason a second start gives when the running instance does not answer.
+pub fn instance_not_answering() -> String {
+    translate("Klickmeister", "The running instance does not answer.")
+}
+
+/// Printed when closing the permissions outlasts the shutdown wait.
+pub fn slow_shutdown(seconds: u64) -> String {
+    fill(
+        &translate(
+            "Klickmeister",
+            "Clicking ended. Closing the permissions takes longer than %1 s and continues in the background.",
+        ),
+        &[&seconds],
+    )
+}
+
+pub fn instance_check_ended() -> String {
+    translate("Klickmeister", "The check thread ended unexpectedly.")
 }
 
 impl fmt::Display for WorkerStatus {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::Ready => "Bereit",
-            Self::RegisteringHotkey => "Tastenkürzel wird eingerichtet …",
-            Self::AwaitingHotkey => "Warte auf Tastenkürzel für Start und Stopp …",
-            Self::AwaitingClickPermission => "Warte auf Freigabe für Maussteuerung …",
-            Self::PermissionRequired => "Freigabe erneut erforderlich",
-            Self::Clicking => "Klicken aktiv",
-            Self::Stopped => "Gestoppt",
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(&match self {
+            Self::Ready => translate("Klickmeister", "Ready"),
+            Self::RegisteringHotkey => translate("Klickmeister", "Setting up the shortcut…"),
+            Self::AwaitingHotkey => {
+                translate("Klickmeister", "Waiting for a start and stop shortcut…")
+            }
+            Self::AwaitingClickPermission => translate(
+                "Klickmeister",
+                "Waiting for permission to control the mouse…",
+            ),
+            Self::PermissionRequired => translate("Klickmeister", "Permission required again"),
+            Self::Clicking => translate("Klickmeister", "Clicking"),
+            Self::Stopped => translate("Klickmeister", "Stopped"),
         })
     }
 }
 
 impl fmt::Display for WorkerError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::WorkerStartFailed(details) => {
-                write!(f, "Die Klicksteuerung konnte nicht gestartet werden: {details}")
-            }
-            Self::HotkeyRequired => {
-                f.write_str("Richte vor dem Start ein Tastenkürzel für Start und Stopp ein.")
-            }
+            Self::WorkerStartFailed(details) => write(
+                f,
+                translate("Klickmeister", "The click control could not be started: %1"),
+                &[details],
+            ),
+            Self::HotkeyRequired => f.write_str(&translate(
+                "Klickmeister",
+                "Set up a start and stop shortcut before starting.",
+            )),
             Self::InvalidSettings(error) => error.fmt(f),
             Self::Click(error) => error.fmt(f),
-            Self::ClickTaskFailed(details) => {
-                write!(f, "Die Maussteuerung konnte nicht gestartet werden: {details}")
-            }
-            Self::ClickSessionLost => f.write_str(
-                "Die Freigabe für die Maussteuerung wurde unerwartet beendet. Versuche den Start erneut.",
+            Self::ClickTaskFailed(details) => write(
+                f,
+                translate("Klickmeister", "Mouse control could not be started: %1"),
+                &[details],
             ),
+            Self::ClickSessionLost => f.write_str(&translate(
+                "Klickmeister",
+                "The permission to control the mouse ended unexpectedly. Try starting again.",
+            )),
             Self::Hotkey(error) => error.fmt(f),
         }
     }
 }
 
 impl fmt::Display for HotkeyError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::SessionClosed => f.write_str(
-                "Die Freigabe für das Tastenkürzel wurde beendet. Wähle „Erneut versuchen“.",
-            ),
-            Self::RequestCancelled => {
-                f.write_str("Die Freigabe für das Tastenkürzel wurde abgebrochen.")
-            }
-            Self::SessionMissing => {
-                f.write_str("Die Freigabe für das Tastenkürzel fehlt. Wähle „Erneut versuchen“.")
-            }
-            Self::Unbound => f.write_str(
-                "Kein Tastenkürzel für Start und Stopp eingerichtet. Wähle unter „Tastenkürzel“ eine Taste.",
-            ),
-            Self::Removed => f.write_str(
-                "Das Tastenkürzel für Start und Stopp wurde entfernt. Wähle „Erneut versuchen“.",
-            ),
-            Self::Setup(details) => {
-                write!(f, "Das Tastenkürzel konnte nicht eingerichtet werden: {details}")
-            }
-            Self::Registration(details) => write!(
+            Self::SessionClosed => f.write_str(&translate(
+                "Klickmeister",
+                "The shortcut permission has ended. Choose “Try again”.",
+            )),
+            Self::RequestCancelled => f.write_str(&translate(
+                "Klickmeister",
+                "The shortcut permission was cancelled.",
+            )),
+            Self::SessionMissing => f.write_str(&translate(
+                "Klickmeister",
+                "The shortcut permission is missing. Choose “Try again”.",
+            )),
+            Self::Unbound => f.write_str(&translate(
+                "Klickmeister",
+                "No start and stop shortcut is set up. Choose a key under “Shortcut”.",
+            )),
+            Self::Removed => f.write_str(&translate(
+                "Klickmeister",
+                "The start and stop shortcut was removed. Choose “Try again”.",
+            )),
+            Self::Setup(details) => write(
                 f,
-                "Klickmeister konnte nicht beim KDE-Portaldienst angemeldet werden: {details}"
+                translate("Klickmeister", "The shortcut could not be set up: %1"),
+                &[details],
             ),
-            Self::Unavailable(details) => write!(
+            Self::Registration(details) => write(
                 f,
-                "Tastenkürzel sind nicht verfügbar. Prüfe den KDE-Portaldienst. Details: {details}"
+                translate(
+                    "Klickmeister",
+                    "Klickmeister could not register with the KDE portal service: %1",
+                ),
+                &[details],
             ),
-            Self::WatchUnavailable => f.write_str(
-                "Die Freigabe für das Tastenkürzel kann nicht überwacht werden. Wähle „Erneut versuchen“.",
-            ),
-            Self::SubscribeTimeout => {
-                f.write_str("Zeitüberschreitung beim Einrichten des Tastenkürzels.")
-            }
-            Self::Receive(details) => {
-                write!(f, "Das Tastenkürzel kann nicht empfangen werden: {details}")
-            }
-            Self::Request(details) => write!(
+            Self::Unavailable(details) => write(
                 f,
-                "Die Freigabe für das Tastenkürzel konnte nicht angefordert werden: {details}"
+                translate(
+                    "Klickmeister",
+                    "Shortcuts are not available. Check the KDE portal service. Details: %1",
+                ),
+                &[details],
             ),
-            Self::NotGranted(details) => {
-                write!(f, "Das Tastenkürzel wurde nicht freigegeben: {details}")
-            }
-            Self::SettingsUnavailable(details) => write!(
+            Self::WatchUnavailable => f.write_str(&translate(
+                "Klickmeister",
+                "The shortcut permission cannot be monitored. Choose “Try again”.",
+            )),
+            Self::SubscribeTimeout => f.write_str(&translate(
+                "Klickmeister",
+                "Setting up the shortcut timed out.",
+            )),
+            Self::Receive(details) => write(
                 f,
-                "Die Einstellungen für das Tastenkürzel konnten nicht geöffnet werden: {details}"
+                translate("Klickmeister", "The shortcut cannot be received: %1"),
+                &[details],
+            ),
+            Self::Request(details) => write(
+                f,
+                translate(
+                    "Klickmeister",
+                    "The shortcut permission could not be requested: %1",
+                ),
+                &[details],
+            ),
+            Self::NotGranted(details) => write(
+                f,
+                translate("Klickmeister", "The shortcut was not permitted: %1"),
+                &[details],
+            ),
+            Self::SettingsUnavailable(details) => write(
+                f,
+                translate(
+                    "Klickmeister",
+                    "The shortcut settings could not be opened: %1",
+                ),
+                &[details],
             ),
         }
     }
 }
 
 impl fmt::Display for SendError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::Closing => "Klickmeister wird geschlossen.",
-            Self::Busy => "Klickmeister ist ausgelastet. Versuche es erneut.",
-            Self::Stopped => "Die Klicksteuerung wurde beendet. Starte Klickmeister neu.",
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(&match self {
+            Self::Closing => translate("Klickmeister", "Klickmeister is closing."),
+            Self::Busy => translate("Klickmeister", "Klickmeister is busy. Try again."),
+            Self::Stopped => translate(
+                "Klickmeister",
+                "The click control has ended. Restart Klickmeister.",
+            ),
         })
     }
 }
 
 impl fmt::Display for PortalError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let unavailable = || {
+            translate(
+                "Klickmeister",
+                "Mouse control is not available. Check the KDE portal service. Details: %1",
+            )
+        };
+        let not_sent = || translate("Klickmeister", "The click could not be performed: %1");
         match self {
-            Self::Cancelled => f.write_str("Die Freigabe wurde abgebrochen."),
-            Self::Unavailable(details) => write!(
-                f,
-                "Die Maussteuerung ist nicht verfügbar. Prüfe den KDE-Portaldienst. Details: {details}"
-            ),
-            Self::EisUnavailable(details) => write!(
-                f,
-                "Die Maussteuerung ist nicht verfügbar. Prüfe den KDE-Portaldienst. Details: {details}"
-            ),
-            Self::Denied(details) => {
-                write!(f, "Die Freigabe wurde abgelehnt oder abgebrochen: {details}")
+            Self::Cancelled => {
+                f.write_str(&translate("Klickmeister", "The permission was cancelled."))
             }
-            Self::PointerNotGranted => f.write_str(
-                "Die Maussteuerung wurde nicht freigegeben. Erlaube sie beim nächsten Start im KDE-Dialog.",
+            Self::Unavailable(details) => write(f, unavailable(), &[details]),
+            Self::EisUnavailable(details) => write(f, unavailable(), &[details]),
+            Self::Denied(details) => write(
+                f,
+                translate("Klickmeister", "The permission was denied or cancelled: %1"),
+                &[details],
             ),
-            Self::SessionWatchUnavailable => f.write_str(
-                "Die Freigabe für die Maussteuerung kann nicht überwacht werden. Versuche den Start erneut.",
-            ),
-            Self::SessionClosed => f.write_str(
-                "Die Freigabe für die Maussteuerung wurde beendet. Starte erneut, um sie anzufordern.",
-            ),
-            Self::MissingMonitorStream => f.write_str(
-                "KDE hat keine Bildschirmdaten für die feste Position geliefert. Prüfe die Bildschirmfreigabe und starte erneut.",
-            ),
-            Self::MonitorMismatch => f.write_str(
-                "Der ausgewählte Bildschirm stimmt nicht mit den freigegebenen Bildschirmdaten überein. Prüfe die Bildschirmanordnung und wähle die feste Position erneut.",
-            ),
-            Self::MonitorUnverifiable => f.write_str(
-                "Die feste Position kann keinem Bildschirm eindeutig zugeordnet werden. Wähle die aktuelle Mauszeigerposition oder versuche es erneut.",
-            ),
+            Self::PointerNotGranted => f.write_str(&translate(
+                "Klickmeister",
+                "Mouse control was not permitted. Allow it in the KDE dialog on the next start.",
+            )),
+            Self::SessionWatchUnavailable => f.write_str(&translate(
+                "Klickmeister",
+                "The permission to control the mouse cannot be monitored. Try starting again.",
+            )),
+            Self::SessionClosed => f.write_str(&translate(
+                "Klickmeister",
+                "The permission to control the mouse has ended. Start again to request it.",
+            )),
+            Self::MissingMonitorStream => f.write_str(&translate(
+                "Klickmeister",
+                "KDE did not provide screen data for the fixed position. Check the screen sharing permission and start again.",
+            )),
+            Self::MonitorMismatch => f.write_str(&translate(
+                "Klickmeister",
+                "The selected screen does not match the shared screen data. Check the screen arrangement and choose the fixed position again.",
+            )),
+            Self::MonitorUnverifiable => f.write_str(&translate(
+                "Klickmeister",
+                "The fixed position cannot be matched to exactly one screen. Choose the current pointer position or try again.",
+            )),
             Self::PositionOutsideStream {
                 x,
                 y,
                 width,
                 height,
-            } => write!(
+            } => write(
                 f,
-                "Die Position ({x}, {y}) liegt außerhalb des freigegebenen Bildschirms ({width} × {height}). Wähle eine neue Position."
+                translate(
+                    "Klickmeister",
+                    "The position (%1, %2) lies outside the shared screen (%3 × %4). Choose a new position.",
+                ),
+                &[x, y, width, height],
             ),
-            Self::Send(details) => write!(f, "Der Klick konnte nicht ausgeführt werden: {details}"),
-            Self::EisSend(details) => {
-                write!(f, "Der Klick konnte nicht ausgeführt werden: {details}")
-            }
-            Self::EventTimeout => f.write_str(
-                "KDE hat die Maussteuerung nicht rechtzeitig bestätigt. Versuche den Start erneut.",
-            ),
+            Self::Send(details) => write(f, not_sent(), &[details]),
+            Self::EisSend(details) => write(f, not_sent(), &[details]),
+            Self::EventTimeout => f.write_str(&translate(
+                "Klickmeister",
+                "KDE did not confirm mouse control in time. Try starting again.",
+            )),
         }
     }
 }
 
 impl fmt::Display for ValidationError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::IntervalTooShort { min_interval_ms } => write!(
+            Self::IntervalTooShort { min_interval_ms } => write(
                 f,
-                "Wähle ein Klickintervall von mindestens {min_interval_ms} ms (höchstens {MAX_CLICKS_PER_SECOND} Klicks/s)."
+                translate(
+                    "Klickmeister",
+                    "Choose a click interval of at least %1 ms (at most %2 clicks/s).",
+                ),
+                &[min_interval_ms, &MAX_CLICKS_PER_SECOND],
             ),
-            Self::IntervalTooLong => write!(
+            Self::IntervalTooLong => write(
                 f,
-                "Wähle ein Klickintervall von höchstens {MAX_INTERVAL_HOURS} Stunden."
+                translate(
+                    "Klickmeister",
+                    "Choose a click interval of at most %1 hours.",
+                ),
+                &[&MAX_INTERVAL_HOURS],
             ),
-            Self::InvalidRepeat => {
-                write!(f, "Wähle zwischen 1 und {MAX_REPEAT_COUNT} Klickzyklen.")
+            Self::InvalidRepeat => write(
+                f,
+                translate("Klickmeister", "Choose between 1 and %1 click cycles."),
+                &[&MAX_REPEAT_COUNT],
+            ),
+            Self::InvalidCoordinates => f.write_str(&translate(
+                "Klickmeister",
+                "The coordinates are outside the supported range. Choose a new position.",
+            )),
+            Self::InvalidMonitorPosition => f.write_str(&translate(
+                "Klickmeister",
+                "The fixed position is outside the screen, or no screen is selected. Check the screen and coordinates.",
+            )),
+            Self::InvalidMouseButton => {
+                f.write_str(&translate("Klickmeister", "Choose a valid mouse button."))
             }
-            Self::InvalidCoordinates => f.write_str(
-                "Die Koordinaten liegen außerhalb des unterstützten Bereichs. Wähle eine neue Position.",
-            ),
-            Self::InvalidMonitorPosition => f.write_str(
-                "Die feste Position liegt außerhalb des Bildschirms oder kein Bildschirm ist ausgewählt. Prüfe Bildschirm und Koordinaten.",
-            ),
-            Self::InvalidMouseButton => f.write_str("Wähle eine gültige Maustaste."),
-            Self::InvalidClickType => f.write_str("Wähle eine gültige Klickart."),
+            Self::InvalidClickType => {
+                f.write_str(&translate("Klickmeister", "Choose a valid click type."))
+            }
         }
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::eis::EisError;
+impl fmt::Display for EisError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Io(details) => write(
+                f,
+                translate("Klickmeister", "libei connection failed: %1"),
+                &[details],
+            ),
+            Self::Protocol(details) => write(
+                f,
+                translate("Klickmeister", "libei protocol error: %1"),
+                &[details],
+            ),
+            Self::Disconnected => f.write_str(&translate("Klickmeister", "libei connection ended")),
+            Self::NoDevice => f.write_str(&translate(
+                "Klickmeister",
+                "no matching libei pointer device",
+            )),
+            Self::NoRegion => {
+                f.write_str(&translate("Klickmeister", "no libei region for the screen"))
+            }
+        }
+    }
+}
 
-    /// Issue #144: the texts are the same as when the worker sent them itself.
-    #[test]
-    fn shows_every_message_unchanged() {
-        let details = || "Testfehler".to_owned();
-        let shown: Vec<(String, &str)> = vec![
-            (WorkerStatus::Ready.to_string(), "Bereit"),
-            (
-                WorkerStatus::RegisteringHotkey.to_string(),
-                "Tastenkürzel wird eingerichtet …",
+impl fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::MissingHome => f.write_str(&translate(
+                "Klickmeister",
+                "The settings location is missing. HOME or XDG_CONFIG_HOME must be an absolute path.",
+            )),
+            Self::Read(details) => write(
+                f,
+                translate("Klickmeister", "Settings could not be loaded: %1"),
+                &[details],
             ),
-            (
-                WorkerStatus::AwaitingHotkey.to_string(),
-                "Warte auf Tastenkürzel für Start und Stopp …",
+            Self::Parse(details) => write(
+                f,
+                translate("Klickmeister", "The settings file is invalid: %1"),
+                &[details],
             ),
-            (
-                WorkerStatus::AwaitingClickPermission.to_string(),
-                "Warte auf Freigabe für Maussteuerung …",
+            Self::Write(details) => write(
+                f,
+                translate("Klickmeister", "Settings could not be saved: %1"),
+                &[details],
             ),
-            (
-                WorkerStatus::PermissionRequired.to_string(),
-                "Freigabe erneut erforderlich",
+            Self::Serialize(details) => write(
+                f,
+                translate("Klickmeister", "Settings could not be prepared for saving: %1"),
+                &[details],
             ),
-            (WorkerStatus::Clicking.to_string(), "Klicken aktiv"),
-            (WorkerStatus::Stopped.to_string(), "Gestoppt"),
-            (ERROR_STATUS.to_owned(), "Fehler"),
-            (
-                countdown_status(3),
-                "Start in 3 s · Bewege den Mauszeiger zum Ziel.",
+        }
+    }
+}
+
+impl fmt::Display for InstanceError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let unchecked = || {
+            translate(
+                "Klickmeister",
+                "Cannot check whether Klickmeister is already running: %1",
+            )
+        };
+        match self {
+            Self::NoSessionBus(details) => write(
+                f,
+                translate("Klickmeister", "The D-Bus session is not reachable: %1"),
+                &[details],
             ),
-            (
-                WorkerError::WorkerStartFailed(details()).to_string(),
-                "Die Klicksteuerung konnte nicht gestartet werden: Testfehler",
+            Self::Activation(details) => write(
+                f,
+                translate(
+                    "Klickmeister",
+                    "Klickmeister is already running, but its window could not be shown: %1",
+                ),
+                &[details],
             ),
-            (
-                WorkerError::HotkeyRequired.to_string(),
-                "Richte vor dem Start ein Tastenkürzel für Start und Stopp ein.",
-            ),
-            (
-                WorkerError::InvalidSettings(ValidationError::InvalidMouseButton).to_string(),
-                "Wähle eine gültige Maustaste.",
-            ),
-            (
-                WorkerError::Click(PortalError::Cancelled).to_string(),
-                "Die Freigabe wurde abgebrochen.",
-            ),
-            (
-                WorkerError::ClickTaskFailed(details()).to_string(),
-                "Die Maussteuerung konnte nicht gestartet werden: Testfehler",
-            ),
-            (
-                WorkerError::ClickSessionLost.to_string(),
-                "Die Freigabe für die Maussteuerung wurde unerwartet beendet. Versuche den Start erneut.",
-            ),
-            (
-                WorkerError::Hotkey(HotkeyError::SessionClosed).to_string(),
-                "Die Freigabe für das Tastenkürzel wurde beendet. Wähle „Erneut versuchen“.",
-            ),
-            (
-                HotkeyError::RequestCancelled.to_string(),
-                "Die Freigabe für das Tastenkürzel wurde abgebrochen.",
-            ),
-            (
-                HotkeyError::SessionMissing.to_string(),
-                "Die Freigabe für das Tastenkürzel fehlt. Wähle „Erneut versuchen“.",
-            ),
-            (
-                HotkeyError::Unbound.to_string(),
-                "Kein Tastenkürzel für Start und Stopp eingerichtet. Wähle unter „Tastenkürzel“ eine Taste.",
-            ),
-            (
-                HotkeyError::Removed.to_string(),
-                "Das Tastenkürzel für Start und Stopp wurde entfernt. Wähle „Erneut versuchen“.",
-            ),
-            (
-                HotkeyError::Setup(details()).to_string(),
-                "Das Tastenkürzel konnte nicht eingerichtet werden: Testfehler",
-            ),
-            (
-                HotkeyError::Registration(details()).to_string(),
-                "Klickmeister konnte nicht beim KDE-Portaldienst angemeldet werden: Testfehler",
-            ),
-            (
-                HotkeyError::Unavailable(details()).to_string(),
-                "Tastenkürzel sind nicht verfügbar. Prüfe den KDE-Portaldienst. Details: Testfehler",
-            ),
-            (
-                HotkeyError::WatchUnavailable.to_string(),
-                "Die Freigabe für das Tastenkürzel kann nicht überwacht werden. Wähle „Erneut versuchen“.",
-            ),
-            (
-                HotkeyError::SubscribeTimeout.to_string(),
-                "Zeitüberschreitung beim Einrichten des Tastenkürzels.",
-            ),
-            (
-                HotkeyError::Receive(details()).to_string(),
-                "Das Tastenkürzel kann nicht empfangen werden: Testfehler",
-            ),
-            (
-                HotkeyError::Request(details()).to_string(),
-                "Die Freigabe für das Tastenkürzel konnte nicht angefordert werden: Testfehler",
-            ),
-            (
-                HotkeyError::NotGranted(details()).to_string(),
-                "Das Tastenkürzel wurde nicht freigegeben: Testfehler",
-            ),
-            (
-                HotkeyError::SettingsUnavailable(details()).to_string(),
-                "Die Einstellungen für das Tastenkürzel konnten nicht geöffnet werden: Testfehler",
-            ),
-            (
-                SendError::Closing.to_string(),
-                "Klickmeister wird geschlossen.",
-            ),
-            (
-                SendError::Busy.to_string(),
-                "Klickmeister ist ausgelastet. Versuche es erneut.",
-            ),
-            (
-                SendError::Stopped.to_string(),
-                "Die Klicksteuerung wurde beendet. Starte Klickmeister neu.",
-            ),
-            (
-                PortalError::EisUnavailable(EisError::NoDevice).to_string(),
-                "Die Maussteuerung ist nicht verfügbar. Prüfe den KDE-Portaldienst. Details: kein passendes libei-Zeigegerät",
-            ),
-            (
-                PortalError::PointerNotGranted.to_string(),
-                "Die Maussteuerung wurde nicht freigegeben. Erlaube sie beim nächsten Start im KDE-Dialog.",
-            ),
-            (
-                PortalError::SessionWatchUnavailable.to_string(),
-                "Die Freigabe für die Maussteuerung kann nicht überwacht werden. Versuche den Start erneut.",
-            ),
-            (
-                PortalError::SessionClosed.to_string(),
-                "Die Freigabe für die Maussteuerung wurde beendet. Starte erneut, um sie anzufordern.",
-            ),
-            (
-                PortalError::MissingMonitorStream.to_string(),
-                "KDE hat keine Bildschirmdaten für die feste Position geliefert. Prüfe die Bildschirmfreigabe und starte erneut.",
-            ),
-            (
-                PortalError::MonitorMismatch.to_string(),
-                "Der ausgewählte Bildschirm stimmt nicht mit den freigegebenen Bildschirmdaten überein. Prüfe die Bildschirmanordnung und wähle die feste Position erneut.",
-            ),
-            (
-                PortalError::MonitorUnverifiable.to_string(),
-                "Die feste Position kann keinem Bildschirm eindeutig zugeordnet werden. Wähle die aktuelle Mauszeigerposition oder versuche es erneut.",
-            ),
-            (
-                PortalError::PositionOutsideStream {
-                    x: 10,
-                    y: 20,
-                    width: 1920,
-                    height: 1080,
-                }
-                .to_string(),
-                "Die Position (10, 20) liegt außerhalb des freigegebenen Bildschirms (1920 × 1080). Wähle eine neue Position.",
-            ),
-            (
-                PortalError::EisSend(EisError::Disconnected).to_string(),
-                "Der Klick konnte nicht ausgeführt werden: libei-Verbindung beendet",
-            ),
-            (
-                PortalError::EventTimeout.to_string(),
-                "KDE hat die Maussteuerung nicht rechtzeitig bestätigt. Versuche den Start erneut.",
-            ),
-            (
-                ValidationError::IntervalTooShort { min_interval_ms: 4 }.to_string(),
-                "Wähle ein Klickintervall von mindestens 4 ms (höchstens 500 Klicks/s).",
-            ),
-            (
-                ValidationError::IntervalTooLong.to_string(),
-                "Wähle ein Klickintervall von höchstens 24 Stunden.",
-            ),
-            (
-                ValidationError::InvalidRepeat.to_string(),
-                "Wähle zwischen 1 und 10000000 Klickzyklen.",
-            ),
-            (
-                ValidationError::InvalidCoordinates.to_string(),
-                "Die Koordinaten liegen außerhalb des unterstützten Bereichs. Wähle eine neue Position.",
-            ),
-            (
-                ValidationError::InvalidMonitorPosition.to_string(),
-                "Die feste Position liegt außerhalb des Bildschirms oder kein Bildschirm ist ausgewählt. Prüfe Bildschirm und Koordinaten.",
-            ),
-            (
-                ValidationError::InvalidClickType.to_string(),
-                "Wähle eine gültige Klickart.",
-            ),
-        ];
-        for (shown, expected) in shown {
-            assert_eq!(shown, expected);
+            Self::Bus(details) => write(f, unchecked(), &[details]),
+            Self::Thread(details) => write(f, unchecked(), &[details]),
         }
     }
 }

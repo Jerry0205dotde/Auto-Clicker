@@ -53,15 +53,15 @@ Kirigami.ApplicationWindow {
             // one second from an exact rate of one cycle per second.
             const cycleRate = Number(cyclesPerSecond.toFixed(3))
             const clickRate = Number((cyclesPerSecond * clicksPerCycle).toFixed(3))
-            const cycleUnit = cycleRate === 1 ? qsTr("Zyklus/s") : qsTr("Zyklen/s")
-            const clickUnit = clickRate === 1 ? qsTr("Klick/s") : qsTr("Klicks/s")
+            const cycleUnit = cycleRate === 1 ? qsTr("cycle/s") : qsTr("cycles/s")
+            const clickUnit = clickRate === 1 ? qsTr("click/s") : qsTr("clicks/s")
             return qsTr("%1 %2 · %3 %4")
                 .arg(formatRateNumber(cycleRate, 3)).arg(cycleUnit)
                 .arg(formatRateNumber(clickRate, 3)).arg(clickUnit)
         }
         const seconds = formatRateNumber(intervalMs / 1000, 3)
-        const clicks = clicksPerCycle === 1 ? qsTr("1 Klick") : qsTr("2 Klicks")
-        return qsTr("1 Zyklus alle %1 s · %2 alle %1 s").arg(seconds).arg(clicks)
+        const clicks = clicksPerCycle === 1 ? qsTr("1 click") : qsTr("2 clicks")
+        return qsTr("1 cycle every %1 s · %2 every %1 s").arg(seconds).arg(clicks)
     }
 
     function finishPicker(restoreHost) {
@@ -219,7 +219,7 @@ Kirigami.ApplicationWindow {
                 const screens = Qt.application.screens
                 const index = picker.screen
                     ? monitors.restoreIndex(screens, monitors.identity(picker.screen)) : -1
-                const positionError = qsTr("Der gewählte Punkt kann keinem Bildschirm zugeordnet werden. Wähle die Position erneut.")
+                const positionError = qsTr("The chosen point cannot be matched to a screen. Choose the position again.")
                 if (index < 0 || x < 0 || y < 0
                         || x >= screens[index].width || y >= screens[index].height) {
                     controller.fixed_position_confirmed = false
@@ -307,7 +307,7 @@ Kirigami.ApplicationWindow {
         objectName: "saveFailureDialog"
         modal: true
         closePolicy: Controls.Popup.NoAutoClose
-        title: qsTr("Einstellungen nicht gespeichert")
+        title: qsTr("Settings not saved")
         width: Math.min(root.width - 32, 440)
         x: (root.width - width) / 2
         y: (root.height - height) / 2
@@ -328,7 +328,7 @@ Kirigami.ApplicationWindow {
                 Controls.Button {
                     objectName: "continueEditingButton"
                     Layout.fillWidth: true
-                    text: qsTr("Zurück zur Anwendung")
+                    text: qsTr("Back to the application")
                     onClicked: {
                         saveFailureDialog.close()
                         controller.cancel_close()
@@ -337,7 +337,7 @@ Kirigami.ApplicationWindow {
                 Controls.Button {
                     objectName: "discardSettingsButton"
                     Layout.fillWidth: true
-                    text: qsTr("Ohne Speichern schließen")
+                    text: qsTr("Close without saving")
                     onClicked: {
                         saveFailureDialog.close()
                         root.discardSettingsOnClose = true
@@ -364,16 +364,16 @@ Kirigami.ApplicationWindow {
                 Controls.Label {
                     objectName: "hotkeyStatusLabel"
                     Layout.fillWidth: true
-                    text: controller.hotkey_configuring ? qsTr("Dialog öffnet …") :
-                          controller.hotkey_pending ? qsTr("Wird eingerichtet …") :
-                              (controller.hotkey_ready ? controller.hotkey : qsTr("Nicht verfügbar"))
+                    text: controller.hotkey_configuring ? qsTr("Opening dialog…") :
+                          controller.hotkey_pending ? qsTr("Setting up…") :
+                              (controller.hotkey_ready ? controller.hotkey : qsTr("Not available"))
                     elide: Text.ElideRight
-                    Accessible.name: qsTr("Tastenkürzel: %1").arg(text)
+                    Accessible.name: qsTr("Shortcut: %1").arg(text)
                 }
                 Controls.ToolButton {
                     objectName: "hotkeyConfigureButton"
                     icon.name: "input-keyboard"
-                    text: controller.hotkey_ready ? qsTr("Ändern …") : qsTr("Erneut versuchen")
+                    text: controller.hotkey_ready ? qsTr("Change…") : qsTr("Try again")
                     enabled: root.controlsEnabled && !controller.hotkey_pending
                     // GlobalShortcuts v1 cannot open its settings for a bound hotkey.
                     onClicked: {
@@ -382,7 +382,7 @@ Kirigami.ApplicationWindow {
                         else
                             controller.configure_hotkey()
                     }
-                    Controls.ToolTip.text: qsTr("Tastenkürzel für Start und Stopp ändern")
+                    Controls.ToolTip.text: qsTr("Change the start and stop shortcut")
                     Controls.ToolTip.visible: hovered
                     Controls.ToolTip.delay: Kirigami.Units.toolTipDelay
                 }
@@ -397,12 +397,12 @@ Kirigami.ApplicationWindow {
                 Layout.fillWidth: true
                 Layout.preferredHeight: Kirigami.Units.gridUnit * 2.6
                 highlighted: true
-                text: countdown > 0 ? qsTr("■  Start abbrechen (%1)").arg(countdown)
-                    : stopMode ? qsTr("■  Stoppen") : qsTr("▶  Starten")
+                text: countdown > 0 ? qsTr("■  Cancel start (%1)").arg(countdown)
+                    : stopMode ? qsTr("■  Stop") : qsTr("▶  Start")
                 enabled: stopMode || (controller.hotkey_ready && !controller.hotkey_pending)
-                Accessible.name: countdown > 1 ? qsTr("Start abbrechen, Klicken beginnt in %1 Sekunden").arg(countdown)
-                    : countdown === 1 ? qsTr("Start abbrechen, Klicken beginnt in 1 Sekunde")
-                    : stopMode ? qsTr("Stoppen") : qsTr("Starten")
+                Accessible.name: countdown > 1 ? qsTr("Cancel start, clicking begins in %1 seconds").arg(countdown)
+                    : countdown === 1 ? qsTr("Cancel start, clicking begins in 1 second")
+                    : stopMode ? qsTr("Stop") : qsTr("Start")
                 onClicked: stopMode ? controller.stop() : controller.start_from_button()
             }
 
@@ -466,7 +466,7 @@ Kirigami.ApplicationWindow {
                     Layout.fillWidth: true
                     visible: false
                     type: Kirigami.MessageType.Warning
-                    text: qsTr("Klicken gestoppt: Der Bildschirm der festen Position hat sich geändert. Prüfe die Position vor dem nächsten Start.")
+                    text: qsTr("Clicking stopped: The screen of the fixed position has changed. Check the position before the next start.")
                     showCloseButton: true
                 }
                 Kirigami.InlineMessage {
@@ -475,7 +475,7 @@ Kirigami.ApplicationWindow {
                     Layout.fillWidth: true
                     visible: false
                     type: Kirigami.MessageType.Information
-                    text: qsTr("Dieses Desktop-Portal kann das Tastenkürzel nicht aus Klickmeister heraus ändern. Ändere es in den Systemeinstellungen unter „Kurzbefehle“.")
+                    text: qsTr("This desktop portal cannot change the shortcut from within Klickmeister. Change it in System Settings under “Shortcuts”.")
                     showCloseButton: true
                 }
             }
@@ -511,7 +511,7 @@ Kirigami.ApplicationWindow {
             Accessible.role: Accessible.Form
 
             Controls.Label {
-                text: qsTr("Maustaste:")
+                text: qsTr("Mouse button:")
                 Layout.alignment: settingsForm.columns === 2 ? Qt.AlignRight : Qt.AlignLeft
             }
             ChoiceButtons {
@@ -521,15 +521,15 @@ Kirigami.ApplicationWindow {
                 iconOnly: true
                 value: controller.mouse_button
                 options: [
-                    { value: 0, icon: "input-mouse-click-left", text: qsTr("Links") },
-                    { value: 2, icon: "input-mouse-click-middle", text: qsTr("Mitte") },
-                    { value: 1, icon: "input-mouse-click-right", text: qsTr("Rechts") }
+                    { value: 0, icon: "input-mouse-click-left", text: qsTr("Left") },
+                    { value: 2, icon: "input-mouse-click-middle", text: qsTr("Middle") },
+                    { value: 1, icon: "input-mouse-click-right", text: qsTr("Right") }
                 ]
                 onSelected: choice => { controller.mouse_button = choice; controller.mark_settings_changed() }
             }
 
             Controls.Label {
-                text: qsTr("Klick:")
+                text: qsTr("Click:")
                 Layout.alignment: settingsForm.columns === 2 ? Qt.AlignRight : Qt.AlignLeft
             }
             ChoiceButtons {
@@ -538,8 +538,8 @@ Kirigami.ApplicationWindow {
                 Layout.minimumWidth: 0
                 value: controller.click_type
                 options: [
-                    { value: 0, text: qsTr("1×"), description: qsTr("Einzelklick") },
-                    { value: 1, text: qsTr("2×"), description: qsTr("Doppelklick") }
+                    { value: 0, text: qsTr("1×"), description: qsTr("Single click") },
+                    { value: 1, text: qsTr("2×"), description: qsTr("Double click") }
                 ]
                 // Double clicks need a longer interval for the same click rate.
                 onSelected: choice => {
@@ -550,7 +550,7 @@ Kirigami.ApplicationWindow {
             }
 
             Controls.Label {
-                text: qsTr("Intervall:")
+                text: qsTr("Interval:")
                 Layout.alignment: settingsForm.columns === 2 ? Qt.AlignRight : Qt.AlignLeft
             }
             RowLayout {
@@ -569,7 +569,7 @@ Kirigami.ApplicationWindow {
                     wheelEnabled: false
                     value: controller.interval_ms
                     onValueModified: { controller.interval_ms = value; controller.mark_settings_changed() }
-                    Accessible.name: qsTr("Klickintervall in Millisekunden")
+                    Accessible.name: qsTr("Click interval in milliseconds")
                 }
                 Controls.Label { text: qsTr("ms") }
             }
@@ -584,7 +584,7 @@ Kirigami.ApplicationWindow {
             }
 
             Controls.Label {
-                text: qsTr("Wiederholen:")
+                text: qsTr("Repeat:")
                 Layout.alignment: settingsForm.columns === 2 ? Qt.AlignRight : Qt.AlignLeft
             }
             ChoiceButtons {
@@ -593,13 +593,13 @@ Kirigami.ApplicationWindow {
                 Layout.minimumWidth: 0
                 value: controller.repeat_until_stopped
                 options: [
-                    { value: true, text: "∞", description: qsTr("Bis zum Stoppen") },
-                    { value: false, text: qsTr("Klickzyklen") }
+                    { value: true, text: "∞", description: qsTr("Until stopped") },
+                    { value: false, text: qsTr("Click cycles") }
                 ]
                 onSelected: choice => { controller.repeat_until_stopped = choice; controller.mark_settings_changed() }
             }
             Controls.Label {
-                text: qsTr("Anzahl:")
+                text: qsTr("Count:")
                 visible: !controller.repeat_until_stopped
                 Layout.alignment: settingsForm.columns === 2 ? Qt.AlignRight : Qt.AlignLeft
             }
@@ -616,7 +616,7 @@ Kirigami.ApplicationWindow {
                 wheelEnabled: false
                 value: controller.repeat_count
                 onValueModified: { controller.repeat_count = value; controller.mark_settings_changed() }
-                Accessible.name: qsTr("Anzahl der Klickzyklen")
+                Accessible.name: qsTr("Number of click cycles")
             }
 
             Kirigami.Separator {
@@ -625,7 +625,7 @@ Kirigami.ApplicationWindow {
             }
 
             Controls.Label {
-                text: qsTr("Ziel:")
+                text: qsTr("Target:")
                 Layout.alignment: settingsForm.columns === 2 ? Qt.AlignRight : Qt.AlignLeft
             }
             ChoiceButtons {
@@ -634,16 +634,16 @@ Kirigami.ApplicationWindow {
                 Layout.minimumWidth: 0
                 value: controller.current_position
                 options: [
-                    { value: true, icon: "cursor-arrow", text: qsTr("Mauszeiger"),
-                      description: qsTr("Aktuelle Mauszeigerposition") },
-                    { value: false, icon: "crosshairs", text: qsTr("Fester Punkt"),
-                      description: qsTr("Feste Position") }
+                    { value: true, icon: "cursor-arrow", text: qsTr("Pointer"),
+                      description: qsTr("Current pointer position") },
+                    { value: false, icon: "crosshairs", text: qsTr("Fixed point"),
+                      description: qsTr("Fixed position") }
                 ]
                 onSelected: choice => { controller.current_position = choice; controller.mark_settings_changed() }
             }
 
             Controls.Label {
-                text: qsTr("Bildschirm:")
+                text: qsTr("Screen:")
                 visible: root.fixedPosition
                 Layout.alignment: settingsForm.columns === 2 ? Qt.AlignRight : Qt.AlignLeft
             }
@@ -662,11 +662,11 @@ Kirigami.ApplicationWindow {
                 }
                 wheelEnabled: false
                 onActivated: root.selectMonitor(model[currentIndex].screen)
-                Accessible.name: qsTr("Bildschirm für die feste Position")
+                Accessible.name: qsTr("Screen for the fixed position")
             }
 
             Controls.Label {
-                text: qsTr("Punkt:")
+                text: qsTr("Point:")
                 visible: root.fixedPosition
                 Layout.alignment: settingsForm.columns === 2 ? Qt.AlignRight : Qt.AlignLeft
             }
@@ -687,7 +687,7 @@ Kirigami.ApplicationWindow {
                     wheelEnabled: false
                     value: controller.fixed_x
                     onValueModified: { controller.fixed_x = value; root.markPositionChanged() }
-                    Accessible.name: qsTr("X-Koordinate auf dem gewählten Bildschirm")
+                    Accessible.name: qsTr("X coordinate on the selected screen")
                 }
                 Controls.Label { text: "Y" }
                 Controls.SpinBox {
@@ -702,7 +702,7 @@ Kirigami.ApplicationWindow {
                     wheelEnabled: false
                     value: controller.fixed_y
                     onValueModified: { controller.fixed_y = value; root.markPositionChanged() }
-                    Accessible.name: qsTr("Y-Koordinate auf dem gewählten Bildschirm")
+                    Accessible.name: qsTr("Y coordinate on the selected screen")
                 }
             }
 
@@ -712,17 +712,17 @@ Kirigami.ApplicationWindow {
                 Controls.Button {
                     objectName: "pickButton"
                     icon.name: "crosshairs"
-                    text: qsTr("Auswählen …")
+                    text: qsTr("Choose…")
                     enabled: !!root.selectedMonitor
                     onClicked: root.beginPicker(false)
-                    Controls.ToolTip.text: qsTr("Punkt im Vollbild auf dem Bildschirm wählen")
+                    Controls.ToolTip.text: qsTr("Choose the point full screen on the selected screen")
                     Controls.ToolTip.visible: hovered
                     Controls.ToolTip.delay: Kirigami.Units.toolTipDelay
                 }
                 Controls.ToolButton {
                     objectName: "previewButton"
                     icon.name: "view-visible"
-                    text: qsTr("Punkt anzeigen")
+                    text: qsTr("Show point")
                     display: Controls.AbstractButton.IconOnly
                     enabled: !!root.selectedMonitor && controller.fixed_position_confirmed
                     onClicked: root.beginPicker(true)
@@ -738,7 +738,7 @@ Kirigami.ApplicationWindow {
                 Layout.fillWidth: true
                 visible: root.fixedPosition && !controller.fixed_position_confirmed
                 type: Kirigami.MessageType.Warning
-                text: qsTr("Prüfe Bildschirm und Koordinaten und bestätige die Position oder wähle sie neu.")
+                text: qsTr("Check the screen and coordinates, then confirm the position or choose it again.")
             }
 
             Controls.Button {
@@ -747,7 +747,7 @@ Kirigami.ApplicationWindow {
                 visible: root.fixedPosition && !controller.fixed_position_confirmed
                 enabled: !!root.selectedMonitor
                 icon.name: "dialog-ok-apply"
-                text: qsTr("Position bestätigen")
+                text: qsTr("Confirm position")
                 onClicked: root.confirmMonitor()
             }
 
@@ -758,7 +758,7 @@ Kirigami.ApplicationWindow {
                 wrapMode: Text.WordWrap
                 font: Kirigami.Theme.smallFont
                 color: Kirigami.Theme.disabledTextColor
-                text: qsTr("Das Hauptfenster kann auf einem anderen Bildschirm bleiben.")
+                text: qsTr("The main window can stay on another screen.")
             }
         }
     }

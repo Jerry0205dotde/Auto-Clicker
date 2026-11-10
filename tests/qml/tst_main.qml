@@ -56,11 +56,11 @@ TestCase {
 
     function test_choice_buttons_update_controller_data() {
         return [
-            { tag: "right button", group: "mouseButtonInput", label: "Rechts", property: "mouse_button", value: 1 },
-            { tag: "middle button", group: "mouseButtonInput", label: "Mitte", property: "mouse_button", value: 2 },
-            { tag: "double click", group: "clickTypeInput", label: "Doppelklick", property: "click_type", value: 1 },
-            { tag: "repeat count", group: "repeatModeInput", label: "Klickzyklen", property: "repeat_until_stopped", value: false },
-            { tag: "fixed position", group: "positionModeInput", label: "Feste Position", property: "current_position", value: false }
+            { tag: "right button", group: "mouseButtonInput", label: "Right", property: "mouse_button", value: 1 },
+            { tag: "middle button", group: "mouseButtonInput", label: "Middle", property: "mouse_button", value: 2 },
+            { tag: "double click", group: "clickTypeInput", label: "Double click", property: "click_type", value: 1 },
+            { tag: "repeat count", group: "repeatModeInput", label: "Click cycles", property: "repeat_until_stopped", value: false },
+            { tag: "fixed position", group: "positionModeInput", label: "Fixed position", property: "current_position", value: false }
         ]
     }
     function test_choice_buttons_update_controller(data) {
@@ -122,14 +122,14 @@ TestCase {
     }
 
     function test_mouse_icon_buttons_have_tooltips() {
-        const button = choice("mouseButtonInput", "Links")
+        const button = choice("mouseButtonInput", "Left")
         // The offscreen platform disables hover effects by default.
         button.hoverEnabled = true
         waitForRendering(button)
         mouseMove(button, button.width / 2, button.height / 2)
         tryCompare(button, "hovered", true)
         tryCompare(button.Controls.ToolTip, "visible", true)
-        compare(button.Controls.ToolTip.text, "Links")
+        compare(button.Controls.ToolTip.text, "Left")
     }
 
     function test_saved_coordinates_are_visible_after_monitor_initialization() {
@@ -595,7 +595,7 @@ TestCase {
         keyClick(Qt.Key_Escape)
         compare(dialog.opened, true)
         // Later worker errors do not replace the save error in the dialog.
-        controller.error_message = "Tastenkürzel nicht verfügbar"
+        controller.error_message = "Shortcut not available"
         compare(dialog.message, "Einstellungen konnten nicht gespeichert werden")
 
         controller.saveConfigSucceeds = true
@@ -635,12 +635,12 @@ TestCase {
 
     function test_edits_are_saved_on_close_without_click_start_data() {
         return [
-            { tag: "mouse button", group: "mouseButtonInput", label: "Rechts", property: "mouse_button", value: 1 },
-            { tag: "click type", group: "clickTypeInput", label: "Doppelklick", property: "click_type", value: 1 },
-            { tag: "repeat mode", group: "repeatModeInput", label: "Klickzyklen", property: "repeat_until_stopped", value: false },
-            { tag: "position mode", group: "positionModeInput", label: "Feste Position", property: "current_position", value: false },
-            { tag: "repeat until stopped", group: "repeatModeInput", label: "Bis zum Stoppen", property: "repeat_until_stopped", initial: false, value: true },
-            { tag: "cursor position", group: "positionModeInput", label: "Aktuelle Mauszeigerposition", property: "current_position", initial: false, value: true }
+            { tag: "mouse button", group: "mouseButtonInput", label: "Right", property: "mouse_button", value: 1 },
+            { tag: "click type", group: "clickTypeInput", label: "Double click", property: "click_type", value: 1 },
+            { tag: "repeat mode", group: "repeatModeInput", label: "Click cycles", property: "repeat_until_stopped", value: false },
+            { tag: "position mode", group: "positionModeInput", label: "Fixed position", property: "current_position", value: false },
+            { tag: "repeat until stopped", group: "repeatModeInput", label: "Until stopped", property: "repeat_until_stopped", initial: false, value: true },
+            { tag: "cursor position", group: "positionModeInput", label: "Current pointer position", property: "current_position", initial: false, value: true }
         ]
     }
     function test_edits_are_saved_on_close_without_click_start(data) {
@@ -752,8 +752,8 @@ TestCase {
         const y = findChild(main, "yInput")
         verify(x !== null)
         verify(y !== null)
-        compare(x.Accessible.name, "X-Koordinate auf dem gewählten Bildschirm")
-        compare(y.Accessible.name, "Y-Koordinate auf dem gewählten Bildschirm")
+        compare(x.Accessible.name, "X coordinate on the selected screen")
+        compare(y.Accessible.name, "Y coordinate on the selected screen")
         compare(x.contentItem.Accessible.name, x.Accessible.name)
         compare(y.contentItem.Accessible.name, y.Accessible.name)
     }
@@ -922,25 +922,25 @@ TestCase {
         const nearOneCycle = Number(1.001).toLocaleString(Qt.locale(), 'f', 3)
         const nearTwoClicks = Number(2.002).toLocaleString(Qt.locale(), 'f', 3)
         const scenarios = [
-            { interval: 2, type: 0, expected: "500 Zyklen/s · 500 Klicks/s" },
-            { interval: 4, type: 1, expected: "250 Zyklen/s · 500 Klicks/s" },
-            { interval: 10, type: 0, expected: "100 Zyklen/s · 100 Klicks/s" },
-            { interval: 10, type: 1, expected: "100 Zyklen/s · 200 Klicks/s" },
-            { interval: 1000, type: 0, expected: "1 Zyklus/s · 1 Klick/s" },
-            { interval: 1000, type: 1, expected: "1 Zyklus/s · 2 Klicks/s" },
-            { interval: 999, type: 0, expected: nearOneCycle + " Zyklen/s · " + nearOneCycle + " Klicks/s" },
-            { interval: 999, type: 1, expected: nearOneCycle + " Zyklen/s · " + nearTwoClicks + " Klicks/s" },
-            { interval: 5000, type: 0, expected: "1 Zyklus alle 5 s · 1 Klick alle 5 s" },
-            { interval: 5000, type: 1, expected: "1 Zyklus alle 5 s · 2 Klicks alle 5 s" },
-            { interval: 2500, type: 1, expected: "1 Zyklus alle " + twoAndHalf + " s · 2 Klicks alle " + twoAndHalf + " s" }
+            { interval: 2, type: 0, expected: "500 cycles/s · 500 clicks/s" },
+            { interval: 4, type: 1, expected: "250 cycles/s · 500 clicks/s" },
+            { interval: 10, type: 0, expected: "100 cycles/s · 100 clicks/s" },
+            { interval: 10, type: 1, expected: "100 cycles/s · 200 clicks/s" },
+            { interval: 1000, type: 0, expected: "1 cycle/s · 1 click/s" },
+            { interval: 1000, type: 1, expected: "1 cycle/s · 2 clicks/s" },
+            { interval: 999, type: 0, expected: nearOneCycle + " cycles/s · " + nearOneCycle + " clicks/s" },
+            { interval: 999, type: 1, expected: nearOneCycle + " cycles/s · " + nearTwoClicks + " clicks/s" },
+            { interval: 5000, type: 0, expected: "1 cycle every 5 s · 1 click every 5 s" },
+            { interval: 5000, type: 1, expected: "1 cycle every 5 s · 2 clicks every 5 s" },
+            { interval: 2500, type: 1, expected: "1 cycle every " + twoAndHalf + " s · 2 clicks every " + twoAndHalf + " s" }
         ]
         for (const scenario of scenarios) {
             controller.interval_ms = scenario.interval
             controller.click_type = scenario.type
             tryCompare(rateLabel, "text", scenario.expected)
-            controller.status = "Klicken aktiv"
+            controller.status = "Clicking"
             controller.running = true
-            compare(statusLabel.text, "Status: Klicken aktiv · " + scenario.expected)
+            compare(statusLabel.text, "Status: Clicking · " + scenario.expected)
             controller.running = false
         }
     }
@@ -951,28 +951,28 @@ TestCase {
         controller.interval_ms = 2
         compare(input.from, 2)
         compare(input.value, 2)
-        mouseClick(choice("clickTypeInput", "Doppelklick"))
+        mouseClick(choice("clickTypeInput", "Double click"))
         compare(controller.click_type, 1)
         compare(input.from, 4)
         compare(controller.interval_ms, 4)
         compare(input.value, 4)
         compare(controller.configDirty, true)
         // Single clicks may go faster again, but keep the chosen interval.
-        mouseClick(choice("clickTypeInput", "Einzelklick"))
+        mouseClick(choice("clickTypeInput", "Single click"))
         compare(input.from, 2)
         compare(controller.interval_ms, 4)
         // Longer intervals are unchanged by switching.
         controller.interval_ms = 3
-        mouseClick(choice("clickTypeInput", "Doppelklick"))
+        mouseClick(choice("clickTypeInput", "Double click"))
         compare(controller.interval_ms, 4)
         controller.interval_ms = 250
-        mouseClick(choice("clickTypeInput", "Einzelklick"))
-        mouseClick(choice("clickTypeInput", "Doppelklick"))
+        mouseClick(choice("clickTypeInput", "Single click"))
+        mouseClick(choice("clickTypeInput", "Double click"))
         compare(controller.interval_ms, 250)
     }
 
     function test_repeat_count_is_labeled_as_cycles() {
-        compare(choice("repeatModeInput", "Klickzyklen").text, "Klickzyklen")
+        compare(choice("repeatModeInput", "Click cycles").text, "Click cycles")
     }
 
     function test_hotkey_recovery_controls() {
@@ -985,26 +985,26 @@ TestCase {
 
         controller.hotkey_ready = false
         controller.hotkey_pending = false
-        compare(retry.text, "Erneut versuchen")
-        compare(status.text, "Nicht verfügbar")
+        compare(retry.text, "Try again")
+        compare(status.text, "Not available")
         compare(retry.enabled, true)
         compare(start.enabled, false)
 
         controller.hotkey_pending = true
-        compare(status.text, "Wird eingerichtet …")
+        compare(status.text, "Setting up…")
         compare(retry.enabled, false)
         compare(start.enabled, false)
 
         controller.hotkey_ready = true
         controller.hotkey_configuring = true
-        compare(status.text, "Dialog öffnet …")
+        compare(status.text, "Opening dialog…")
         compare(retry.enabled, false)
         compare(start.enabled, false)
 
         controller.hotkey_pending = false
         controller.hotkey_configuring = false
         compare(status.text, "Pause")
-        compare(retry.text, "Ändern …")
+        compare(retry.text, "Change…")
         compare(retry.enabled, true)
         compare(start.enabled, true)
     }
@@ -1017,17 +1017,17 @@ TestCase {
         verify(message !== null)
 
         controller.hotkey_configurable = false
-        compare(change.text, "Ändern …")
+        compare(change.text, "Change…")
         compare(change.enabled, true)
         compare(message.visible, false)
         mouseClick(change)
         compare(controller.configureCount, 0)
         tryCompare(message, "visible", true)
-        verify(message.text.indexOf("„Kurzbefehle“") >= 0, message.text)
+        verify(message.text.indexOf("“Shortcuts”") >= 0, message.text)
 
         // An unavailable v1 hotkey is still registered again.
         controller.hotkey_ready = false
-        compare(change.text, "Erneut versuchen")
+        compare(change.text, "Try again")
         mouseClick(change)
         compare(controller.configureCount, 1)
     }
@@ -1053,8 +1053,8 @@ TestCase {
         controller.current_position = !data.fixed
         controller.fixed_position_confirmed = false
         // Keep scrolling necessary even with smaller CI fonts and icon themes.
-        controller.error_message = Array(16).join("Ein Portalfehler mit zusätzlicher Beschreibung. ")
-        controller.status = data.busy ? "Warte auf Freigabe für Maussteuerung …" : (data.running ? "Klicken aktiv" : "Bereit")
+        controller.error_message = Array(16).join("A portal error with an additional description. ")
+        controller.status = data.busy ? "Waiting for permission to control the mouse…" : (data.running ? "Clicking" : "Ready")
         controller.hotkey_ready = data.ready
         controller.hotkey_pending = data.pending
         controller.busy = data.busy
@@ -1079,8 +1079,8 @@ TestCase {
         verify(button.visible && inWindow(button), "Run control must remain in the window")
         verify(status.visible && inWindow(status), "Run status must remain in the window")
         compare(button.enabled, data.running || data.busy || (data.ready && !data.pending))
-        compare(button.text, data.running || data.busy ? "■  Stoppen" : "▶  Starten")
-        compare(button.Accessible.name, data.running || data.busy ? "Stoppen" : "Starten")
+        compare(button.text, data.running || data.busy ? "■  Stop" : "▶  Start")
+        compare(button.Accessible.name, data.running || data.busy ? "Stop" : "Start")
         const expectedStatus = "Status: " + controller.status
             + (data.running ? " · " + main.rateDescription : "")
         compare(status.text, expectedStatus)
@@ -1144,24 +1144,24 @@ TestCase {
         verify(button !== null)
         controller.hotkey_ready = true
         controller.hotkey_pending = false
-        compare(button.text, "▶  Starten")
-        compare(button.Accessible.name, "Starten")
+        compare(button.text, "▶  Start")
+        compare(button.Accessible.name, "Start")
         mouseClick(button)
         compare(controller.button_starts, 1)
         compare(controller.stops, 0)
 
         // Waiting for the Wayland permission: pending, but no countdown yet.
         controller.busy = true
-        compare(button.text, "■  Stoppen")
-        compare(button.Accessible.name, "Stoppen")
+        compare(button.text, "■  Stop")
+        compare(button.Accessible.name, "Stop")
 
         // The countdown stays cancellable even if the hotkey becomes unavailable.
         controller.countdown_remaining = 3
-        compare(button.text, "■  Start abbrechen (3)")
-        compare(button.Accessible.name, "Start abbrechen, Klicken beginnt in 3 Sekunden")
+        compare(button.text, "■  Cancel start (3)")
+        compare(button.Accessible.name, "Cancel start, clicking begins in 3 seconds")
         controller.countdown_remaining = 1
-        compare(button.text, "■  Start abbrechen (1)")
-        compare(button.Accessible.name, "Start abbrechen, Klicken beginnt in 1 Sekunde")
+        compare(button.text, "■  Cancel start (1)")
+        compare(button.Accessible.name, "Cancel start, clicking begins in 1 second")
         controller.hotkey_ready = false
         compare(button.enabled, true)
         mouseClick(button)
@@ -1169,18 +1169,18 @@ TestCase {
         compare(controller.countdown_remaining, 0)
         compare(controller.button_starts, 1)
         controller.hotkey_ready = true
-        compare(button.text, "▶  Starten")
-        compare(button.Accessible.name, "Starten")
+        compare(button.text, "▶  Start")
+        compare(button.Accessible.name, "Start")
 
         // A countdown value without a pending start is never shown.
         controller.countdown_remaining = 2
-        compare(button.text, "▶  Starten")
-        compare(button.Accessible.name, "Starten")
+        compare(button.text, "▶  Start")
+        compare(button.Accessible.name, "Start")
         controller.countdown_remaining = 0
 
         // A running click loop is stopped, never restarted with a countdown.
         controller.running = true
-        compare(button.text, "■  Stoppen")
+        compare(button.text, "■  Stop")
         mouseClick(button)
         compare(controller.stops, 2)
         compare(controller.button_starts, 1)

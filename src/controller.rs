@@ -2,7 +2,7 @@ use std::{path::Path, pin::Pin};
 
 use crate::{
     config::{self, AppConfig, ConfigError},
-    messages::{ERROR_STATUS, countdown_status},
+    messages,
     model::{
         ClickSettings, ClickType, MAX_COORDINATE, MAX_INTERVAL_MS, MAX_REPEAT_COUNT,
         MonitorGeometry, MouseButton, PositionMode, RepeatMode, validate_interval,
@@ -200,11 +200,7 @@ impl Default for AppControllerRust {
             Ok(config) => (config, None),
             Err(error @ (ConfigError::Read(_) | ConfigError::Parse(_))) => (
                 AppConfig::default(),
-                Some(format!(
-                    "{error}\n\nKlickmeister nutzt vorerst Standardwerte. Bevor geänderte \
-                     Einstellungen gespeichert werden, wird die Datei daneben als \
-                     config.toml.invalid gesichert (bei Bedarf mit angehängter Nummer)."
-                )),
+                Some(messages::unloaded_config_notice(&error)),
             ),
             Err(error) => (AppConfig::default(), Some(error.to_string())),
         };
@@ -257,8 +253,8 @@ impl AppControllerRust {
     fn click_controls(&self) -> Result<(MouseButton, ClickType, u64), String> {
         let button = MouseButton::try_from(self.mouse_button).map_err(|error| error.to_string())?;
         let click_type = ClickType::try_from(self.click_type).map_err(|error| error.to_string())?;
-        let interval_ms = u64::try_from(self.interval_ms)
-            .map_err(|_| "Wähle ein Klickintervall größer als 0 ms.".to_owned())?;
+        let interval_ms =
+            u64::try_from(self.interval_ms).map_err(|_| messages::interval_not_positive())?;
         Ok((button, click_type, interval_ms))
     }
 
@@ -269,7 +265,7 @@ impl AppControllerRust {
         let repeat_count = match u64::try_from(self.repeat_count) {
             Ok(count) if (1..=MAX_REPEAT_COUNT).contains(&count) => count,
             _ if self.repeat_until_stopped => 100,
-            _ => return Err("Die Anzahl der Klickzyklen ist ungültig. Prüfe den Wert.".to_owned()),
+            _ => return Err(messages::invalid_repeat_count()),
         };
         let position = if !self.fixed_position_confirmed {
             // A missing saved monitor makes the UI clamp coordinates to a
@@ -284,7 +280,7 @@ impl AppControllerRust {
         } else if self.current_position {
             SavedPosition::default()
         } else {
-            return Err("Die Koordinaten sind ungültig. Wähle eine neue Position.".to_owned());
+            return Err(messages::invalid_coordinates());
         };
         Ok(AppConfig {
             interval_ms,
@@ -581,9 +577,7 @@ impl qobject::AppController {
         let worker = self.rust().worker.as_ref();
         let result = match worker {
             Some(worker) => worker.send(command).map_err(|error| error.to_string()),
-            None => {
-                Err("Die Klicksteuerung ist nicht verfügbar. Starte Klickmeister neu.".to_owned())
-            }
+            None => Err(messages::worker_unavailable()),
         };
         if let Err(error) = result {
             if send_failure_ends_run(worker) {
@@ -598,27 +592,20 @@ impl qobject::AppController {
     /// Build validated settings; unconfirmed fixed positions cannot start.
     fn settings(self: Pin<&Self>) -> Result<ClickSettings, String> {
         if !*self.current_position() && !*self.fixed_position_confirmed() {
-            return Err(
-                "Prüfe Bildschirm und Koordinaten und bestätige die feste Position.".to_owned(),
-            );
+            return Err(messages::position_unconfirmed());
         }
         let (button, click_type, interval_ms) = self.rust().click_controls()?;
         let repeat = if *self.repeat_until_stopped() {
             None
         } else {
-            Some(
-                u64::try_from(*self.repeat_count())
-                    .map_err(|_| "Wähle mindestens einen Klickzyklus.".to_owned())?,
-            )
+            Some(u64::try_from(*self.repeat_count()).map_err(|_| messages::no_repeat())?)
         };
         let position = if *self.current_position() {
             None
         } else {
             Some((
-                u32::try_from(*self.fixed_x())
-                    .map_err(|_| "Die X-Koordinate muss eine ganze Zahl ab 0 sein.".to_owned())?,
-                u32::try_from(*self.fixed_y())
-                    .map_err(|_| "Die Y-Koordinate muss eine ganze Zahl ab 0 sein.".to_owned())?,
+                u32::try_from(*self.fixed_x()).map_err(|_| messages::negative_x())?,
+                u32::try_from(*self.fixed_y()).map_err(|_| messages::negative_y())?,
             ))
         };
         let settings = ClickSettings {
@@ -641,7 +628,8 @@ impl qobject::AppController {
     /// Display an error without replacing an active worker status.
     fn show_error(mut self: Pin<&mut Self>, message: &str) {
         if should_mark_status_as_error(*self.running(), *self.busy()) {
-            self.as_mut().set_status(QString::from(ERROR_STATUS));
+            self.as_mut()
+                .set_status(QString::from(&messages::error_status()));
         }
         self.as_mut().set_error_message(QString::from(message));
     }
@@ -661,7 +649,7 @@ impl qobject::AppController {
                 // The run is already `Starting`; the worker ends the countdown via `State`.
                 self.as_mut().set_countdown_remaining(i32::from(remaining));
                 self.as_mut()
-                    .set_status(QString::from(&countdown_status(remaining)));
+                    .set_status(QString::from(&messages::countdown_status(remaining)));
             }
             WorkerEvent::Status(status) => {
                 self.as_mut().set_status(QString::from(&status.to_string()));
@@ -939,10 +927,7 @@ mod tests {
             .persist_config_to(&path, false)
             .err()
             .unwrap_or_default();
-        assert!(
-            error.starts_with("Einstellungen konnten nicht gespeichert werden"),
-            "{error}"
-        );
+        assert!(error.starts_with("Settings could not be saved"), "{error}");
         assert_eq!(std::fs::read_to_string(&path).ok(), previous);
         assert!(controller.config_dirty);
 
@@ -1278,9 +1263,7 @@ mod tests {
         controller.click_type = ClickType::Double.into();
         assert_eq!(
             controller.config_snapshot(),
-            Err(
-                "Wähle ein Klickintervall von mindestens 4 ms (höchstens 500 Klicks/s).".to_owned()
-            )
+            Err("Choose a click interval of at least 4 ms (at most 500 clicks/s).".to_owned())
         );
         controller.interval_ms = 4;
         assert!(controller.config_snapshot().is_ok());

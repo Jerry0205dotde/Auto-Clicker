@@ -14,8 +14,8 @@ from gi.repository import Atspi  # noqa: E402 -- require_version must run first
 
 ROOT = Path(__file__).resolve().parents[1]
 NAMES = (
-    "X-Koordinate auf dem gewählten Bildschirm",
-    "Y-Koordinate auf dem gewählten Bildschirm",
+    "X coordinate on the selected screen",
+    "Y coordinate on the selected screen",
 )
 ROLES = {Atspi.Role.SPIN_BUTTON, Atspi.Role.TEXT}
 
@@ -37,7 +37,7 @@ def coordinate_roles(pid):
             # Fixed-position fields become visible after selecting that mode.
             for node in descendants(app):
                 if (node.get_role() == Atspi.Role.RADIO_BUTTON
-                        and node.get_name() == "Feste Position"
+                        and node.get_name() == "Fixed position"
                         and not node.get_state_set().contains(Atspi.StateType.CHECKED)):
                     node.get_action_iface().do_action(0)
             for node in descendants(app):

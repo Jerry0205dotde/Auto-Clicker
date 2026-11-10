@@ -37,11 +37,15 @@ Echte KDE-Dialoge und die Zeigersteuerung auf physischen Bildschirmen werden zus
 
 Prüfe den Start-Countdown manuell an einem eigenen Testziel: Vor Ablauf der drei Sekunden darf kein Klick erfolgen. **Start abbrechen** und das Tastenkürzel müssen den Countdown ohne Klick beenden. Wiederhole die Prüfung mit bereits erteilter Freigabe. Starts per Tastenkürzel und mit fester Position müssen ohne Countdown beginnen.
 
-GitHub Actions führt Formatierung, Clippy, Rust- und Portaltests, QML-Tests im KDE-Stil, Python-Tests sowie Desktop- und AppStream-Validierung aus. Danach folgen Release-Build und QML-Smoke-Test. Ein separater Job prüft die QML-Oberfläche unter einem virtuellen KWin mit drei Bildschirmen. Beide Jobs verwenden Arch-Linux-Container und die Cargo-Lockdatei; native Tests mit echten KDE-Dialogen bleiben eine manuelle Prüfung.
+GitHub Actions führt Formatierung, Clippy, Rust- und Portaltests, QML-Tests im KDE-Stil, die Vollständigkeitsprüfung der deutschen Übersetzung, Python-Tests sowie Desktop- und AppStream-Validierung aus. Danach folgen Release-Build und QML-Smoke-Test. Ein separater Job prüft die QML-Oberfläche unter einem virtuellen KWin mit drei Bildschirmen. Beide Jobs verwenden Arch-Linux-Container und die Cargo-Lockdatei; native Tests mit echten KDE-Dialogen bleiben eine manuelle Prüfung.
 
 Der Workflow „Dependencies“ prüft die Abhängigkeiten mit cargo-deny auf RustSec-Meldungen, Lizenzen und Paketquellen. Er läuft bei Pull Requests und zusätzlich jeden Montag, damit neue Meldungen auch ohne Code-Änderung auffallen. Dependabot schlägt wöchentlich gruppierte Updates für Cargo-Abhängigkeiten und die auf Commit-SHAs festgelegten GitHub Actions vor.
 
 Der virtuelle KWin-Job nutzt die aktuellen Arch-Pakete. Seit KWin 6.8 braucht der virtuelle Compositor ein Render-Gerät; der Container erhält dafür `/dev/udmabuf`, eine GPU ist nicht nötig. Hintergrund, isolierte Reproduktion und Aktualisierung sind unter [tests/virtual-wayland.md](tests/virtual-wayland.md) beschrieben.
+
+## Übersetzungen
+
+Die Texte der Oberfläche sind englisch, die deutsche Übersetzung liegt in `translations/klickmeister_de.ts`. `build.rs` übersetzt sie mit `lrelease` und bettet sie ein; Klickmeister lädt sie passend zur Systemsprache, sonst bleibt die Oberfläche englisch. QML-Texte stehen in `qsTr`, die Texte aus dem Rust-Code ausschließlich in `src/messages.rs` als `translate("Klickmeister", "…")`. Nach dem Ändern eines Textes übernimmt `bash scripts/update-translations.sh` ihn in die `.ts`-Datei; die neue Übersetzung trägst du dort oder mit Qt Linguist ein. `bash scripts/update-translations.sh --check` prüft wie die CI, dass die Datei aktuell und vollständig übersetzt ist. `tests/translation.rs` prüft die deutschen Texte aus dem Rust-Code.
 
 ## QML-Sprachserver
 

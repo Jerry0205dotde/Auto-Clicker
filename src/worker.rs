@@ -41,7 +41,7 @@ use tokio::{
 
 use crate::{
     input::{ClickSession, PlatformClickSession},
-    messages::HOTKEY_DESCRIPTION,
+    messages,
     model::{ClickSettings, ValidationError},
     parent_window,
     portal::{register_connection, watch_portal_owner},
@@ -333,11 +333,7 @@ impl WorkerHandle {
     /// End the worker and wait a bounded time for its portal cleanup.
     pub fn shutdown(self) {
         if !self.shutdown_within(SHUTDOWN_WAIT) {
-            eprintln!(
-                "Klicken beendet. Das Schließen der Freigaben dauert länger als {} s \
-                 und wird im Hintergrund fortgesetzt.",
-                SHUTDOWN_WAIT.as_secs()
-            );
+            eprintln!("{}", messages::slow_shutdown(SHUTDOWN_WAIT.as_secs()));
         }
     }
 
@@ -640,7 +636,7 @@ async fn setup_hotkey(
         })
         .await?;
         let binding = async {
-            let shortcut = NewShortcut::new(HOTKEY_ID, HOTKEY_DESCRIPTION)
+            let shortcut = NewShortcut::new(HOTKEY_ID, messages::hotkey_description())
                 .preferred_trigger(Some(PREFERRED_TRIGGER));
             let parent = parent_window::identifier().await;
             let response = portal

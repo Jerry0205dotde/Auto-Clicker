@@ -28,12 +28,12 @@ TestCase {
         const monitor = screen("DP-1", "")
         monitor.model = ""
         monitor.manufacturer = ""
-        compare(monitors.displayName(monitor, [monitor]), "Bildschirm (DP-1)")
+        compare(monitors.displayName(monitor, [monitor]), "Screen (DP-1)")
         monitor.model = "DP-1"
-        compare(monitors.displayName(monitor, [monitor]), "Bildschirm (DP-1)")
+        compare(monitors.displayName(monitor, [monitor]), "Screen (DP-1)")
         monitor.name = ""
         monitor.model = ""
-        compare(monitors.displayName(monitor, [monitor]), "Bildschirm 1")
+        compare(monitors.displayName(monitor, [monitor]), "Screen 1")
     }
 
     function test_restores_monitor_after_order_changes() {

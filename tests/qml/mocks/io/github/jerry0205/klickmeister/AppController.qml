@@ -2,7 +2,7 @@ import QtQuick
 
 // QML-only fixture: portal and worker behavior is tested separately in Rust.
 QtObject {
-    property string status: "Bereit"
+    property string status: "Ready"
     property string error_message: ""
     property string hotkey: "Pause"
     property bool hotkey_ready: true

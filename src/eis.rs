@@ -11,20 +11,30 @@ use std::{
 
 use futures_util::{FutureExt, StreamExt};
 use reis::{Interface, PendingRequestResult, ei, tokio::EiEventStream};
-use thiserror::Error;
 
-#[derive(Debug, Error)]
+/// Why the libei connection failed. `messages` holds the shown texts.
+#[derive(Debug)]
 pub enum EisError {
-    #[error("libei-Verbindung gestört: {0}")]
-    Io(#[from] io::Error),
-    #[error("libei-Protokollfehler: {0}")]
+    Io(io::Error),
     Protocol(String),
-    #[error("libei-Verbindung beendet")]
     Disconnected,
-    #[error("kein passendes libei-Zeigegerät")]
     NoDevice,
-    #[error("kein libei-Bereich für den Bildschirm")]
     NoRegion,
+}
+
+impl std::error::Error for EisError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+impl From<io::Error> for EisError {
+    fn from(error: io::Error) -> Self {
+        Self::Io(error)
+    }
 }
 
 /// The monitor stream a fixed position refers to.
