@@ -20,7 +20,7 @@ Der Workflow baut auf Arch Linux als normaler Benutzer. Er erstellt ein Quellarc
 
 **Release packages → Run workflow** baut dieselben Dateien zum Ausprobieren als Actions-Artefakt. Ein manueller Lauf veröffentlicht kein Release. Bereits veröffentlichte Versionen bleiben unverändert; verwende für die nächste Veröffentlichung einen neuen Versionstag.
 
-Lokal auf einem aktuellen Arch-/CachyOS-System mit den [Build-Abhängigkeiten](../README.md#entwicklung):
+Lokal auf einem aktuellen Arch-/CachyOS-System mit den [Build-Abhängigkeiten](../CONTRIBUTING.md#build-abhängigkeiten):
 
 ```bash
 bash scripts/build-release.sh
