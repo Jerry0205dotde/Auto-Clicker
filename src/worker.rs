@@ -41,7 +41,7 @@ use tokio::{
 
 use crate::{
     input::{ClickSession, PlatformClickSession},
-    messages::HOTKEY_DESCRIPTION,
+    messages,
     model::{ClickSettings, ValidationError},
     parent_window,
     portal::{register_connection, watch_portal_owner},
@@ -640,7 +640,7 @@ async fn setup_hotkey(
         })
         .await?;
         let binding = async {
-            let shortcut = NewShortcut::new(HOTKEY_ID, HOTKEY_DESCRIPTION)
+            let shortcut = NewShortcut::new(HOTKEY_ID, messages::hotkey_description())
                 .preferred_trigger(Some(PREFERRED_TRIGGER));
             let parent = parent_window::identifier().await;
             let response = portal

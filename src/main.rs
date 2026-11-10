@@ -3,9 +3,9 @@ use cxx_qt_lib::{
     QUrl, QVariant,
 };
 use klickmeister::{
-    APP_ID,
+    APP_ID, i18n,
     instance::{self, Claim, InstanceError},
-    parent_window, qml_runtime,
+    messages, parent_window, qml_runtime,
 };
 use std::process::ExitCode;
 
@@ -32,6 +32,7 @@ fn main() -> ExitCode {
     app_pin
         .as_mut()
         .set_organization_name(&QString::from("Klickmeister"));
+    i18n::install_translator();
 
     // Claim before QML creates the controller and its portal sessions. Declared
     // after the application, so the guard stops before Qt is destroyed.
@@ -41,7 +42,7 @@ fn main() -> ExitCode {
         match instance::claim(activation_token, qml_runtime::queue_activation) {
             Ok(Claim::Primary(guard)) => Some(guard),
             Ok(Claim::Secondary) => {
-                println!("Klickmeister läuft bereits; das vorhandene Fenster wurde angezeigt.");
+                println!("{}", messages::already_running());
                 return ExitCode::SUCCESS;
             }
             // The portals need the same bus, so no second hotkey session can arise.
@@ -72,9 +73,7 @@ fn main() -> ExitCode {
         "qrc:/qt/qml/io/github/jerry0205/klickmeister/qml/Main.qml",
     ));
     if !qml_runtime::has_root_object(&engine) {
-        eprintln!(
-            "Klickmeister konnte nicht geöffnet werden: Das Anwendungsfenster konnte nicht geladen werden."
-        );
+        eprintln!("{}", messages::window_not_loaded());
         return ExitCode::FAILURE;
     }
     if smoke_test {

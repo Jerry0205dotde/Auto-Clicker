@@ -12,14 +12,13 @@ use ashpd::zbus::{
     fdo::{RequestNameFlags, RequestNameReply},
     zvariant::{OwnedValue, Value},
 };
-use thiserror::Error;
 use tokio::{
     runtime::Builder,
     sync::oneshot,
     time::{Duration, Instant, sleep, timeout},
 };
 
-use crate::APP_ID;
+use crate::{APP_ID, messages};
 
 /// Path that `org.freedesktop.Application` derives from the app ID.
 pub const OBJECT_PATH: &str = "/io/github/jerry0205/klickmeister";
@@ -60,19 +59,24 @@ pub enum Claim {
     Secondary,
 }
 
-#[derive(Debug, Error)]
+/// Why the instance check failed. `messages` holds the shown texts.
+#[derive(Debug)]
 pub enum InstanceError {
     /// Without a session bus the portals are unreachable as well.
-    #[error("Die D-Bus-Sitzung ist nicht erreichbar: {0}")]
-    NoSessionBus(#[source] zbus::Error),
-    #[error(
-        "Klickmeister läuft bereits, das vorhandene Fenster ließ sich aber nicht anzeigen: {0}"
-    )]
+    NoSessionBus(zbus::Error),
     Activation(String),
-    #[error("Es lässt sich nicht prüfen, ob Klickmeister bereits läuft: {0}")]
-    Bus(#[source] zbus::Error),
-    #[error("Es lässt sich nicht prüfen, ob Klickmeister bereits läuft: {0}")]
-    Thread(#[source] io::Error),
+    Bus(zbus::Error),
+    Thread(io::Error),
+}
+
+impl std::error::Error for InstanceError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::NoSessionBus(error) | Self::Bus(error) => Some(error),
+            Self::Activation(_) => None,
+            Self::Thread(error) => Some(error),
+        }
+    }
 }
 
 /// Owns the instance name and answers activation requests until dropped.
@@ -137,7 +141,7 @@ where
         .map_err(InstanceError::Thread)?;
     let primary = primary.recv().unwrap_or_else(|_| {
         Err(InstanceError::Thread(io::Error::other(
-            "Der Prüfthread wurde unerwartet beendet.",
+            messages::instance_check_ended(),
         )))
     });
     if let Ok(true) = primary {
@@ -227,9 +231,7 @@ impl Application {
         (self.activate)(Activation { token, reply });
         match timeout(ACTIVATION_TIMEOUT, activated).await {
             Ok(Ok(true)) => Ok(()),
-            _ => Err(zbus::fdo::Error::Failed(
-                "Das Klickmeister-Fenster ist gerade nicht verfügbar.".to_owned(),
-            )),
+            _ => Err(zbus::fdo::Error::Failed(messages::window_unavailable())),
         }
     }
 }

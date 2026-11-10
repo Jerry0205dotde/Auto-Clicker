@@ -1,5 +1,6 @@
-use crate::model::{
-    ClickType, MAX_INTERVAL_MS, MAX_REPEAT_COUNT, MouseButton, PositionMode, RepeatMode,
+use crate::{
+    messages,
+    model::{ClickType, MAX_INTERVAL_MS, MAX_REPEAT_COUNT, MouseButton, PositionMode, RepeatMode},
 };
 use serde::{Deserialize, Serialize};
 #[cfg(unix)]
@@ -10,7 +11,6 @@ use std::{
     io::{self, Write},
     path::{Path, PathBuf},
 };
-use thiserror::Error;
 
 const APP_DIR: &str = "klickmeister";
 const CONFIG_FILE: &str = "config.toml";
@@ -58,20 +58,25 @@ impl AppConfig {
     }
 }
 
-#[derive(Debug, Error)]
+/// Why the settings could not be loaded or saved. `messages` holds the shown texts.
+#[derive(Debug)]
 pub enum ConfigError {
-    #[error(
-        "Der Speicherort für die Einstellungen fehlt. HOME oder XDG_CONFIG_HOME muss ein absoluter Pfad sein."
-    )]
     MissingHome,
-    #[error("Einstellungen konnten nicht geladen werden: {0}")]
-    Read(#[source] io::Error),
-    #[error("Die Einstellungsdatei ist ungültig: {0}")]
-    Parse(#[source] toml::de::Error),
-    #[error("Einstellungen konnten nicht gespeichert werden: {0}")]
-    Write(#[source] io::Error),
-    #[error("Einstellungen konnten nicht für das Speichern vorbereitet werden: {0}")]
-    Serialize(#[source] toml::ser::Error),
+    Read(io::Error),
+    Parse(toml::de::Error),
+    Write(io::Error),
+    Serialize(toml::ser::Error),
+}
+
+impl std::error::Error for ConfigError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::MissingHome => None,
+            Self::Read(error) | Self::Write(error) => Some(error),
+            Self::Parse(error) => Some(error),
+            Self::Serialize(error) => Some(error),
+        }
+    }
 }
 
 pub fn config_path() -> Result<PathBuf, ConfigError> {
@@ -116,10 +121,7 @@ pub fn preserve_unloaded(path: &Path) -> Result<Option<PathBuf>, ConfigError> {
     let backup_error = |backup: &Path, error: io::Error| {
         ConfigError::Write(io::Error::new(
             error.kind(),
-            format!(
-                "Die nicht geladene Einstellungsdatei konnte nicht nach {} gesichert werden: {error}",
-                backup.display()
-            ),
+            messages::config_backup_failed(backup, &error),
         ))
     };
     let mut name = path.file_name().unwrap_or(CONFIG_FILE.as_ref()).to_owned();
@@ -164,10 +166,7 @@ pub fn save_to(path: &Path, config: &AppConfig) -> Result<(), ConfigError> {
         Ok(metadata) if metadata.is_symlink() => Some(fs::canonicalize(path).map_err(|error| {
             ConfigError::Write(io::Error::new(
                 error.kind(),
-                format!(
-                    "Das Linkziel der Einstellungsdatei {} konnte nicht aufgelöst werden: {error}",
-                    path.display()
-                ),
+                messages::config_link_unresolved(path, &error),
             ))
         })?),
         Ok(_) => None,
@@ -178,7 +177,7 @@ pub fn save_to(path: &Path, config: &AppConfig) -> Result<(), ConfigError> {
     let parent = path.parent().ok_or_else(|| {
         ConfigError::Write(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "Der Speicherort hat kein übergeordnetes Verzeichnis.",
+            messages::config_without_parent(),
         ))
     })?;
     fs::create_dir_all(parent).map_err(ConfigError::Write)?;
@@ -350,7 +349,7 @@ mod tests {
         assert!(
             result
                 .err()
-                .is_some_and(|error| error.to_string().contains("Linkziel"))
+                .is_some_and(|error| error.to_string().contains("link target"))
         );
         assert_eq!(preserved_link, Some(target));
         assert!(!target_exists);

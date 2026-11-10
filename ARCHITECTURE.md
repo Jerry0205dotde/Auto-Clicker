@@ -8,7 +8,7 @@ Klickmeister ist ein einzelner Prozess mit drei Ausführungskontexten:
 
 Zwischen beiden Richtungen laufen begrenzte Nachrichtenkanäle beziehungsweise in den Qt-Event-Loop eingereihte Zustandsupdates. Stop und Shutdown umgehen den begrenzten Befehlskanal über ein Ein-Wert-Signal, das der Worker vor allen anderen Ereignissen prüft; sie kommen deshalb auch bei vollem Kanal an. Startbefehle, die vor einem Stop eingereiht wurden, verwirft der Worker danach. Ein fehlgeschlagener Versand ändert den angezeigten Laufstatus nur, wenn der Worker beendet ist. Alle Startquellen gehen durch denselben Zustandsautomaten; deshalb kann höchstens ein Scheduler aktiv sein.
 
-Status und Fehler meldet der Worker als Enum-Varianten, technische Details wie der Fehlertext des Portals als deren Felder. Erst der Controller macht daraus Text, und alle diese Texte, auch die von `PortalError` und `ValidationError`, stehen in `src/messages.rs`.
+Status und Fehler meldet der Worker als Enum-Varianten, technische Details wie der Fehlertext des Portals als deren Felder. Erst der Controller macht daraus Text, und alle diese Texte, auch die von `PortalError` und `ValidationError`, stehen in `src/messages.rs`. Sie sind wie die QML-Texte englisch und laufen durch Qts Übersetzung; `main` lädt die deutsche Übersetzung aus den eingebetteten Ressourcen, wenn die Systemsprache Deutsch vor Englisch nennt.
 
 Jeder Startbefehl liefert die aktuellen, validierten Einstellungen. Eine ausstehende Portal-Aufgabe besitzt diese Einstellungen bis zur Freigabe; weitere Startbefehle können sie nicht überschreiben. Der Worker hält keinen Einstellungs-Cache für spätere Starts.
 

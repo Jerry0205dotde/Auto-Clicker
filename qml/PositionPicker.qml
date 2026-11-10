@@ -182,9 +182,9 @@ Window {
             wrapMode: Text.WordWrap
             horizontalAlignment: Text.AlignHCenter
             text: picker.previewOnly
-                ? qsTr("Gespeicherte Position · X: %1 · Y: %2").arg(picker.targetX).arg(picker.targetY)
-                : !picker.inputReady ? qsTr("Positionsauswahl wird geöffnet … · Esc: abbrechen")
-                : qsTr("%1 · X: %2 · Y: %3\nLinksklick: auswählen · Enter: bestätigen\nPfeiltasten: verschieben · Umschalt + Pfeiltasten: 10 Schritte · Esc / Rechtsklick: abbrechen")
+                ? qsTr("Saved position · X: %1 · Y: %2").arg(picker.targetX).arg(picker.targetY)
+                : !picker.inputReady ? qsTr("Opening position selection… · Esc: cancel")
+                : qsTr("%1 · X: %2 · Y: %3\nLeft click: choose · Enter: confirm\nArrow keys: move · Shift + arrow keys: 10 steps · Esc / right click: cancel")
                     .arg(picker.screenName).arg(picker.targetX).arg(picker.targetY)
         }
     }

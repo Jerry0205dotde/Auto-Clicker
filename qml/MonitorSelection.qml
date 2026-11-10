@@ -10,14 +10,14 @@ QtObject {
     function baseName(screen) {
         const model = modelName(screen)
         const manufacturer = String(screen.manufacturer || "").trim()
-        if (!model) return manufacturer ? qsTr("%1-Bildschirm").arg(manufacturer) : qsTr("Bildschirm")
+        if (!model) return manufacturer ? qsTr("%1 screen").arg(manufacturer) : qsTr("Screen")
         if (!manufacturer || model.toLowerCase().startsWith(manufacturer.toLowerCase())) return model
         return manufacturer + " " + model
     }
 
     // Keep models readable; connectors only disambiguate duplicates or missing metadata.
     function displayName(screen, screens) {
-        if (!screen) return qsTr("Kein Bildschirm verfügbar")
+        if (!screen) return qsTr("No screen available")
         const name = baseName(screen)
         let ambiguous = false
         let index = -1
