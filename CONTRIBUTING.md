@@ -70,4 +70,4 @@ bin=$(printf '%s\n' "$PWD/target/release/klickmeister" | sed 's/\\/\\\\\\\\/g; s
 
 Die lokale Datei überdeckt die eines installierten Pakets; nach der Prüfung Link und Datei wieder entfernen. Läuft Klickmeister schon, versucht **Erneut versuchen** die Anmeldung danach noch einmal.
 
-Details zum Aufbau und zu Sicherheitsentscheidungen stehen in [ARCHITECTURE.md](ARCHITECTURE.md) und [SECURITY_REVIEW.md](SECURITY_REVIEW.md). Ändert ein Pull Request Berechtigungen, Portal-Schnittstellen, Abhängigkeiten oder Threads, passt er `SECURITY_REVIEW.md` mit an.
+Details zum Aufbau und zu Sicherheitsentscheidungen stehen in [ARCHITECTURE.md](ARCHITECTURE.md) und [SECURITY_REVIEW.md](SECURITY_REVIEW.md).
