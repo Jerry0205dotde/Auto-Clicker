@@ -11,7 +11,7 @@ if ((EUID == 0)); then
 fi
 for tool in makepkg python3 git tar b2sum sha256sum; do
   if ! command -v "$tool" >/dev/null; then
-    printf 'Missing build tool: %s (requires Arch Linux and the build dependencies in README.md).\n' "$tool" >&2
+    printf 'Missing build tool: %s (requires Arch Linux and the build dependencies in CONTRIBUTING.md).\n' "$tool" >&2
     exit 1
   fi
 done

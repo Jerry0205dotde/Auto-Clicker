@@ -1,6 +1,6 @@
 # Security Review
 
-Stand: 2026-10-27, Arbeitskopie nach Version 0.1.3 (Portal-Anmeldung, Mehrmonitorzuordnung und Einzelinstanz; frühere native Geräteprüfung siehe Testbericht zu 0.1.1)
+Stand: wird zusammen mit dem Code gepflegt. Ein Pull Request, der Berechtigungen, Portal-Schnittstellen, Abhängigkeiten oder Threads ändert, passt diese Datei im selben Zug an; wann sie zuletzt geändert wurde, zeigt `git log -1 -- SECURITY_REVIEW.md`. Die Prüfung auf echten Geräten beschreibt [tests/native](tests/native/README.md).
 
 ## 1. Benötigte Berechtigungen
 

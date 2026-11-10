@@ -59,7 +59,7 @@ def registration_problem(register=portal_register):
             f"Install {APP_ID}.desktop into an applications directory and let the "
             "portal resolve its Exec: link the build into the portal's PATH, use a "
             "local desktop file with an absolute Exec, or install the package. "
-            "See README.md, Desktop-Integration."
+            "See CONTRIBUTING.md, Desktop-Integration."
         )
     return None
 
