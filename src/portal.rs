@@ -15,7 +15,6 @@ use ashpd::{
     },
 };
 use futures_util::{FutureExt, StreamExt, future::FusedFuture};
-use thiserror::Error;
 use tokio::{
     sync::oneshot,
     time::{Duration, timeout},
@@ -88,53 +87,38 @@ pub(crate) async fn register_connection(
     }
 }
 
-#[derive(Debug, Error)]
+/// Why the portal click backend failed. `messages` holds the shown texts.
+#[derive(Debug)]
 pub enum PortalError {
-    #[error("Die Freigabe wurde abgebrochen.")]
     Cancelled,
-    #[error("Die Maussteuerung ist nicht verfügbar. Prüfe den KDE-Portaldienst. Details: {0}")]
-    Unavailable(#[source] ashpd::Error),
-    #[error("Die Freigabe wurde abgelehnt oder abgebrochen: {0}")]
-    Denied(#[source] ashpd::Error),
-    #[error(
-        "Die Maussteuerung wurde nicht freigegeben. Erlaube sie beim nächsten Start im KDE-Dialog."
-    )]
+    Unavailable(ashpd::Error),
+    Denied(ashpd::Error),
     PointerNotGranted,
-    #[error(
-        "Die Freigabe für die Maussteuerung kann nicht überwacht werden. Versuche den Start erneut."
-    )]
     SessionWatchUnavailable,
-    #[error("Die Freigabe für die Maussteuerung wurde beendet. Starte erneut, um sie anzufordern.")]
     SessionClosed,
-    #[error(
-        "KDE hat keine Bildschirmdaten für die feste Position geliefert. Prüfe die Bildschirmfreigabe und starte erneut."
-    )]
     MissingMonitorStream,
-    #[error(
-        "Der ausgewählte Bildschirm stimmt nicht mit den freigegebenen Bildschirmdaten überein. Prüfe die Bildschirmanordnung und wähle die feste Position erneut."
-    )]
     MonitorMismatch,
-    #[error(
-        "Die feste Position kann keinem Bildschirm eindeutig zugeordnet werden. Wähle die aktuelle Mauszeigerposition oder versuche es erneut."
-    )]
     MonitorUnverifiable,
-    #[error(
-        "Die Position ({x}, {y}) liegt außerhalb des freigegebenen Bildschirms ({width} × {height}). Wähle eine neue Position."
-    )]
     PositionOutsideStream {
         x: u32,
         y: u32,
         width: i32,
         height: i32,
     },
-    #[error("Der Klick konnte nicht ausgeführt werden: {0}")]
-    Send(#[source] ashpd::Error),
-    #[error("KDE hat die Maussteuerung nicht rechtzeitig bestätigt. Versuche den Start erneut.")]
+    Send(ashpd::Error),
     EventTimeout,
-    #[error("Die Maussteuerung ist nicht verfügbar. Prüfe den KDE-Portaldienst. Details: {0}")]
-    EisUnavailable(#[source] EisError),
-    #[error("Der Klick konnte nicht ausgeführt werden: {0}")]
-    EisSend(#[source] EisError),
+    EisUnavailable(EisError),
+    EisSend(EisError),
+}
+
+impl std::error::Error for PortalError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Unavailable(error) | Self::Denied(error) | Self::Send(error) => Some(error),
+            Self::EisUnavailable(error) | Self::EisSend(error) => Some(error),
+            _ => None,
+        }
+    }
 }
 
 pub struct PortalClickSession {
