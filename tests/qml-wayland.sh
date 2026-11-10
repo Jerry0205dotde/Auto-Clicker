@@ -7,6 +7,12 @@ qml_runner="${QMLTESTRUNNER:-/usr/lib/qt6/bin/qmltestrunner}"
 for dependency in kwin_wayland kscreen-doctor dbus-run-session setsid timeout python3 "$qml_runner"; do
   command -v "$dependency" >/dev/null || { printf 'Missing dependency: %s\n' "$dependency" >&2; exit 1; }
 done
+# KWin 6.8 composites only with OpenGL. Without a render device it starts
+# without compositing, and window tests fail later with unrelated symptoms.
+if [[ ! -e /dev/udmabuf ]] && ! compgen -G '/dev/dri/renderD*' >/dev/null; then
+  printf 'Missing render device: KWin needs /dev/udmabuf or /dev/dri/renderD*\n' >&2
+  exit 1
+fi
 
 test_dir="$(mktemp -d)"
 session_pid=""
@@ -55,7 +61,7 @@ chmod +x "$test_dir/run.sh"
 status=0
 setsid timeout --foreground 60s env \
   XDG_RUNTIME_DIR="$test_dir/runtime" XDG_CONFIG_HOME="$test_dir/config" \
-  QT_QPA_PLATFORM=offscreen KWIN_COMPOSE=Q \
+  QT_QPA_PLATFORM=offscreen KWIN_COMPOSE=O2 \
   dbus-run-session -- \
   kwin_wayland --virtual --width 1920 --height 1080 --scale "${KLICKMEISTER_TEST_SCALE:-1}" --output-count 3 \
   --no-lockscreen --no-global-shortcuts --no-kactivities \
