@@ -93,14 +93,15 @@ jobs:
     name: QML on virtual KWin
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    container: archlinux:base-devel
+    # KWin 6.8 composites only with OpenGL and needs a render device. The
+    # runner's udmabuf device provides one; see tests/virtual-wayland.md.
+    container:
+      image: archlinux:base-devel
+      options: --device /dev/udmabuf
     steps:
       - name: Install virtual compositor and QML test tools
-        # KWin 6.8 removed device-free QPainter compositing. Keep this job's
-        # dependency set coherent; see tests/virtual-wayland.md before updating.
         run: |
-          printf 'Server = https://archive.archlinux.org/repos/2026/10/13/$repo/os/$arch\n' > /etc/pacman.d/mirrorlist
-          pacman -Syyuu --noconfirm --needed \
+          pacman -Syu --noconfirm --needed \
             git ca-certificates python qt6-base qt6-declarative qt6-wayland \
             kirigami qqc2-desktop-style kwin libkscreen dbus mesa libcap
           pacman -Q kwin qt6-base qt6-declarative qt6-wayland libkscreen mesa

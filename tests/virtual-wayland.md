@@ -6,33 +6,27 @@ complete QML suite using real Wayland windows. The script isolates runtime and
 configuration directories and cleans up the entire session process group.
 Python 3 is required to verify the effective output configuration before QML runs.
 
-The `virtual-wayland` CI job uses the **2026/10/13 Arch Linux Archive** snapshot:
-KWin `6.7.5-3`, Qt Base `6.12.0-2`, Qt Declarative/Wayland `6.12.0-1`, and
-libkscreen `6.7.5-1`. Only this job is pinned. The build, offscreen QML, and
-package checks continue to use rolling Arch dependencies.
+The `virtual-wayland` CI job installs rolling Arch Linux packages, like the
+other jobs, and prints the installed KWin, Qt, libkscreen, and Mesa versions.
+The container receives the runner's `/dev/udmabuf` and nothing else from the host.
 
-## Why the snapshot is required
+## Why the render device is required
 
 KWin 6.8 removed the virtual backend's QPainter renderer. Compare
 [6.7.5's supported compositors](https://github.com/KDE/kwin/blob/v6.7.5/src/backends/virtual/virtual_backend.cpp#L89-L106)
 with [6.8.0's OpenGL-only backend](https://github.com/KDE/kwin/blob/v6.8.0/src/backends/virtual/virtual_backend.cpp#L37-L44).
-Our script deliberately uses `KWIN_COMPOSE=Q` to run without host graphics devices.
-
-In a device-free container, KWin 6.8 also has no render device: its
+OpenGL needs a render device: KWin's
 [GPU manager](https://github.com/KDE/kwin/blob/v6.8.0/src/core/gpumanager.cpp#L80-L99)
-requires `/dev/udmabuf` for a software device or an accessible DRM device.
-The [QPA integration](https://github.com/KDE/kwin/blob/v6.8.0/src/plugins/qpa/integration.cpp#L203-L206)
-dereferences the missing primary device during startup. With Arch's KWin
-`6.8.0-1`, gdb stops in `KWin::RenderDevice::eglShareContext()`; the test script
-exits 139 before QML tests run, with empty compositor and output logs.
-`KWIN_COMPOSE=O2 LIBGL_ALWAYS_SOFTWARE=1` fails at the same point because it
-does not supply the missing device.
+uses `/dev/udmabuf` for a software device or an accessible DRM device.
+`udmabuf` allocates buffers from memory and does not require a GPU.
 
-The archive pins the entire package set together. Installing an older KWin
-beside rolling Qt/KDE libraries would create an unsupported partial downgrade.
-`pacman -Syyuu` refreshes the archive databases and allows the base container's
-newer packages to be downgraded to the same date. Package signatures remain
-enabled. This requires no host devices, desktop mounts, or extra privileges.
+Without either device, KWin 6.8.0 and 6.8.1 crash during startup. Since
+[6.8.2](https://github.com/KDE/kwin/commit/e749ee8617) it starts without
+compositing instead. The QML suite then fails in window tests, for example in
+`test_restores_window_geometry`, and the window of `tst_positionpicker.qml` is
+never exposed. `tests/qml-wayland.sh` therefore refuses to start without
+`/dev/udmabuf` or a `/dev/dri/renderD*` node and requests OpenGL compositing with
+`KWIN_COMPOSE=O2`.
 
 The old script also requested a negative position for `Virtual-2`. KWin rejects
 that request, while `kscreen-doctor` returns zero with an error message. The
@@ -45,13 +39,13 @@ requested scales. A mismatch fails the session before any QML tests run.
 
 ## Reproduce CI locally
 
-Build a disposable image with this Dockerfile, keeping the snapshot and package
-list in sync with `.github/workflows/ci.yml`:
+The host needs `/dev/udmabuf`. If it is missing, load the module with
+`sudo modprobe udmabuf`. Build a disposable image with this
+Dockerfile, keeping the package list in sync with `.github/workflows/ci.yml`:
 
 ```dockerfile
 FROM archlinux:base-devel
-RUN printf 'Server = https://archive.archlinux.org/repos/2026/10/13/$repo/os/$arch\n' > /etc/pacman.d/mirrorlist \
- && pacman -Syyuu --noconfirm --needed \
+RUN pacman -Syu --noconfirm --needed \
       git ca-certificates python qt6-base qt6-declarative qt6-wayland \
       kirigami qqc2-desktop-style kwin libkscreen dbus mesa libcap \
  && setcap -r /usr/bin/kwin_wayland
@@ -62,22 +56,23 @@ With the resulting image tagged `klickmeister-virtual-wayland:local`, run from
 the checkout root:
 
 ```bash
-docker run --rm --network none \
+docker run --rm --network none --device /dev/udmabuf \
   --mount "type=bind,source=$PWD,target=/work,readonly" \
   klickmeister-virtual-wayland:local bash tests/qml-wayland.sh
 ```
 
 Additional runs can pass `-e KLICKMEISTER_TEST_SCALE=1.5`, or
 `-e KLICKMEISTER_TEST_SCALE_1=1.5 -e KLICKMEISTER_TEST_SCALE_2=2`, to Docker.
-The runtime container needs no network access or mounts from a desktop session.
+The runtime container needs no network access, no GPU, and no mounts from a
+desktop session. The session stops after 60 seconds; on CI the suite needs about
+20 seconds, but an older laptop such as an i5-7200U needs longer at every scale.
 
 ## Updating the environment
 
-Advance the date in the virtual job and this document together only after
-checking the candidate KWin's virtual rendering requirements. To remove the pin,
-verify that the current compositor supports a device-free virtual session again.
-Install the complete dependency set from the candidate repositories into a fresh
-container; avoid pinning KWin alone. Keep the same device-free Docker invocation,
-the three-output layout, and the full QML assertions. Require the complete suite
-to pass at scale 1, scale 1.5, and mixed scales before changing the constraint.
+The job follows rolling Arch packages. Install the complete dependency set from
+the same repositories in a fresh container; do not pin KWin alone. If a new KWin
+changes its render device requirements, adapt the device given to the container
+and the check in `tests/qml-wayland.sh` together with this document. Keep the
+isolated session, the three-output layout, and the full QML assertions, and
+require the complete suite to pass at scale 1, scale 1.5, and mixed scales.
 A startup crash remains a failing test, including when it produces no QML log.

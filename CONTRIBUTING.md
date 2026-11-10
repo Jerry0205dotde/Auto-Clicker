@@ -41,7 +41,7 @@ GitHub Actions führt Formatierung, Clippy, Rust- und Portaltests, QML-Tests im 
 
 Der Workflow „Dependencies“ prüft die Abhängigkeiten mit cargo-deny auf RustSec-Meldungen, Lizenzen und Paketquellen. Er läuft bei Pull Requests und zusätzlich jeden Montag, damit neue Meldungen auch ohne Code-Änderung auffallen. Dependabot schlägt wöchentlich gruppierte Updates für Cargo-Abhängigkeiten und die auf Commit-SHAs festgelegten GitHub Actions vor.
 
-Der virtuelle KWin-Job verwendet einen zusammenhängenden Arch-Archivstand mit KWin 6.7.5, da KWin 6.8 das gerätefreie QPainter-Backend entfernt hat. Ursache, isolierte Reproduktion und Aktualisierung des Archivstands sind unter [tests/virtual-wayland.md](tests/virtual-wayland.md) beschrieben.
+Der virtuelle KWin-Job nutzt die aktuellen Arch-Pakete. Seit KWin 6.8 braucht der virtuelle Compositor ein Render-Gerät; der Container erhält dafür `/dev/udmabuf`, eine GPU ist nicht nötig. Hintergrund, isolierte Reproduktion und Aktualisierung sind unter [tests/virtual-wayland.md](tests/virtual-wayland.md) beschrieben.
 
 ## QML-Sprachserver
 
