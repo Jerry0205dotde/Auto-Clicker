@@ -4,7 +4,7 @@ use std::{
     pin::Pin,
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self as std_mpsc, RecvTimeoutError},
     },
     thread,
@@ -71,6 +71,9 @@ pub enum Command {
     StartFromButton(ClickSettings),
     Stop,
     ConfigureHotkey,
+    /// Take the next `klickmeister --toggle` as proof of an external shortcut.
+    CheckExternalShortcut,
+    CancelExternalShortcutCheck,
     Shutdown,
 }
 
@@ -84,6 +87,7 @@ pub enum WorkerEvent {
     HotkeyPhase(HotkeyPhase),
     /// Whether the portal can change a bound hotkey (GlobalShortcuts v2).
     HotkeyConfigurable(bool),
+    ExternalShortcut(ExternalShortcutPhase),
     /// Reserved hotkey start: return current Qt settings, or drop to decline.
     StartRequested(StartRequest),
     Error(WorkerError),
@@ -110,6 +114,8 @@ pub enum WorkerError {
     WorkerStartFailed(String),
     /// A start arrived without a bound hotkey or while its settings are open.
     HotkeyRequired,
+    /// A `klickmeister --toggle` arrived before its shortcut was checked.
+    ExternalShortcutUnconfirmed,
     InvalidSettings(ValidationError),
     Click(ClickError),
     /// The task that requests the mouse permission failed.
@@ -194,6 +200,36 @@ struct PendingStartRequest {
     stops: u64,
 }
 
+/// A shortcut from the desktop's settings that runs `klickmeister --toggle`.
+/// It opens the start lock only once the user has pressed it in a check.
+/// The confirmation lasts until the worker ends, like a portal binding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExternalShortcutPhase {
+    Unconfirmed,
+    Checking,
+    Confirmed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExternalShortcut {
+    Unconfirmed,
+    /// Only a toggle numbered after `after` confirms the shortcut.
+    Checking {
+        after: u64,
+    },
+    Confirmed,
+}
+
+impl ExternalShortcut {
+    const fn phase(self) -> ExternalShortcutPhase {
+        match self {
+            Self::Unconfirmed => ExternalShortcutPhase::Unconfirmed,
+            Self::Checking { .. } => ExternalShortcutPhase::Checking,
+            Self::Confirmed => ExternalShortcutPhase::Confirmed,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HotkeyPhase {
     Unavailable,
@@ -206,6 +242,8 @@ pub struct WorkerHandle {
     tx: mpsc::Sender<QueuedCommand>,
     control: watch::Sender<Control>,
     closing: Arc<AtomicBool>,
+    /// Numbers every `--toggle` before it is queued; see `Toggler`.
+    toggles: Arc<AtomicU64>,
     join: Option<thread::JoinHandle<()>>,
     /// Disconnects when the worker thread ends, also after a panic.
     finished: std_mpsc::Receiver<()>,
@@ -228,6 +266,44 @@ enum QueuedCommand {
         reserved: bool,
     },
     ConfigureHotkey,
+    /// A `klickmeister --toggle`, numbered in the order of arrival.
+    Toggle(u64),
+    CheckExternalShortcut {
+        /// Toggles up to this number were sent before the check began.
+        after: u64,
+    },
+    CancelExternalShortcutCheck,
+}
+
+/// Hands `klickmeister --toggle` from the instance thread to the worker.
+///
+/// Each toggle is numbered before it is queued. When a run ends, the worker
+/// reads the latest number: toggles up to it arrived before the end and may
+/// still stop a later run, but never start one.
+#[derive(Clone)]
+pub struct Toggler {
+    tx: mpsc::Sender<QueuedCommand>,
+    toggles: Arc<AtomicU64>,
+    closing: Arc<AtomicBool>,
+}
+
+impl Toggler {
+    pub fn toggle(&self) -> Result<(), SendError> {
+        if self.closing.load(Ordering::Acquire) {
+            return Err(SendError::Closing);
+        }
+        let toggle = self.toggles.fetch_add(1, Ordering::SeqCst) + 1;
+        self.tx
+            .try_send(QueuedCommand::Toggle(toggle))
+            .map_err(queue_error)
+    }
+}
+
+fn queue_error<T>(error: TrySendError<T>) -> SendError {
+    match error {
+        TrySendError::Full(_) => SendError::Busy,
+        TrySendError::Closed(_) => SendError::Stopped,
+    }
 }
 
 /// A Stop or Shutdown that the worker has not handled yet.
@@ -261,7 +337,9 @@ impl WorkerHandle {
         let (control, control_rx) = watch::channel(Control::default());
         let (finished_tx, finished) = std_mpsc::channel();
         let closing = Arc::new(AtomicBool::new(false));
+        let toggles = Arc::new(AtomicU64::new(0));
         let worker_closing = Arc::clone(&closing);
+        let worker_toggles = Arc::clone(&toggles);
         let worker_emit = Arc::clone(&emit);
         let join = builder
             .spawn(move || {
@@ -273,6 +351,7 @@ impl WorkerHandle {
                     control_rx,
                     Arc::clone(&worker_emit),
                     worker_closing,
+                    worker_toggles,
                     session_idle,
                 );
                 block_on_runtime(runtime, &worker_emit, worker);
@@ -283,8 +362,18 @@ impl WorkerHandle {
             tx,
             control,
             closing,
+            toggles,
             join,
             finished,
+        }
+    }
+
+    /// The path for `klickmeister --toggle`, usable from any thread.
+    pub fn toggler(&self) -> Toggler {
+        Toggler {
+            tx: self.tx.clone(),
+            toggles: Arc::clone(&self.toggles),
+            closing: Arc::clone(&self.closing),
         }
     }
 
@@ -318,11 +407,12 @@ impl WorkerHandle {
                 reserved: false,
             },
             Command::ConfigureHotkey => QueuedCommand::ConfigureHotkey,
+            Command::CheckExternalShortcut => QueuedCommand::CheckExternalShortcut {
+                after: self.toggles.load(Ordering::SeqCst),
+            },
+            Command::CancelExternalShortcutCheck => QueuedCommand::CancelExternalShortcutCheck,
         };
-        self.tx.try_send(command).map_err(|error| match error {
-            TrySendError::Full(_) => SendError::Busy,
-            TrySendError::Closed(_) => SendError::Stopped,
-        })
+        self.tx.try_send(command).map_err(queue_error)
     }
 
     /// Whether the worker loop has ended and can no longer report state changes.
@@ -840,9 +930,10 @@ async fn run_worker(
     control: watch::Receiver<Control>,
     emit: Emitter,
     closing: Arc<AtomicBool>,
+    toggles: Arc<AtomicU64>,
     session_idle: Duration,
 ) {
-    let mut worker = Worker::new(commands, control, emit, session_idle);
+    let mut worker = Worker::new(commands, control, emit, toggles, session_idle);
     loop {
         let wake = worker.wait().await;
         if worker.handle(wake).await.is_break() {
@@ -871,9 +962,13 @@ struct Worker {
     configure_task: Option<JoinHandle<Result<(), HotkeyError>>>,
     hotkey: Option<HotkeyState>,
     hotkey_bound: bool,
+    external_shortcut: ExternalShortcut,
     /// Run ends and Stops the start barrier has seen.
     ended_runs: u64,
     barrier_stops: u64,
+    toggles: Arc<AtomicU64>,
+    /// Toggles up to this number arrived before the latest run end.
+    old_toggles: u64,
 }
 
 impl Worker {
@@ -882,6 +977,7 @@ impl Worker {
         commands: mpsc::Receiver<QueuedCommand>,
         control: watch::Receiver<Control>,
         emit: Emitter,
+        toggles: Arc<AtomicU64>,
         session_idle: Duration,
     ) -> Self {
         let machine = StateMachine::default();
@@ -910,8 +1006,11 @@ impl Worker {
             configure_task: None,
             hotkey: None,
             hotkey_bound: false,
+            external_shortcut: ExternalShortcut::Unconfirmed,
             ended_runs,
             barrier_stops,
+            toggles,
+            old_toggles: 0,
         }
     }
 
@@ -933,6 +1032,7 @@ impl Worker {
         if self.machine.ended_runs() != self.ended_runs || stops != self.barrier_stops {
             self.ended_runs = self.machine.ended_runs();
             self.barrier_stops = stops;
+            self.old_toggles = self.toggles.load(Ordering::SeqCst);
             if let Some(state) = self.hotkey.as_mut() {
                 let portal = zbus::Proxy::clone(&state.portal);
                 let owner = state.portal_owner.clone();
@@ -980,6 +1080,17 @@ impl Worker {
             })) => return self.on_start(settings, stops, from_button, reserved).await,
             Wake::Command(Some(QueuedCommand::ConfigureHotkey)) => {
                 self.on_configure_hotkey().await;
+            }
+            Wake::Command(Some(QueuedCommand::Toggle(toggle))) => self.on_toggle(toggle).await,
+            Wake::Command(Some(QueuedCommand::CheckExternalShortcut { after })) => {
+                if self.external_shortcut != ExternalShortcut::Confirmed {
+                    self.set_external_shortcut(ExternalShortcut::Checking { after });
+                }
+            }
+            Wake::Command(Some(QueuedCommand::CancelExternalShortcutCheck)) => {
+                if matches!(self.external_shortcut, ExternalShortcut::Checking { .. }) {
+                    self.set_external_shortcut(ExternalShortcut::Unconfirmed);
+                }
             }
             Wake::StartReply(result) => return self.on_start_reply(result).await,
             Wake::StartTask(result) => self.on_start_task(result).await,
@@ -1058,7 +1169,7 @@ impl Worker {
             return ControlFlow::Continue(());
         }
         let delay = from_button && settings.position.is_none();
-        if !self.hotkey_bound || self.configure_task.is_some() {
+        if !self.can_stop() || self.configure_task.is_some() {
             self.emit(WorkerEvent::Error(WorkerError::HotkeyRequired));
             return ControlFlow::Continue(());
         }
@@ -1317,17 +1428,61 @@ impl Worker {
                 .as_mut()
                 .is_some_and(|state| !state.start_barrier.is_old(received))
         {
-            // Reserve Starting before asking Qt for current controls, so
-            // a second press toggles off even while Qt is still busy.
-            if self.machine.request_start() {
-                let (request, response) = StartRequest::channel();
-                self.start_request = Some(PendingStartRequest {
-                    reply: response,
-                    stops: self.control.borrow().stops,
-                });
-                self.emit(WorkerEvent::State(self.machine.state()));
-                self.emit(WorkerEvent::StartRequested(request));
+            self.request_start();
+        }
+    }
+
+    /// Reserve Starting before asking Qt for current controls, so a second
+    /// press or toggle stops even while Qt is still busy.
+    fn request_start(&mut self) {
+        if self.machine.request_start() {
+            let (request, response) = StartRequest::channel();
+            self.start_request = Some(PendingStartRequest {
+                reply: response,
+                stops: self.control.borrow().stops,
+            });
+            self.emit(WorkerEvent::State(self.machine.state()));
+            self.emit(WorkerEvent::StartRequested(request));
+        }
+    }
+
+    /// A run needs a stop shortcut: the bound portal hotkey or a checked
+    /// desktop shortcut for `klickmeister --toggle`.
+    fn can_stop(&self) -> bool {
+        self.hotkey_bound || self.external_shortcut == ExternalShortcut::Confirmed
+    }
+
+    fn set_external_shortcut(&mut self, shortcut: ExternalShortcut) {
+        self.external_shortcut = shortcut;
+        self.emit(WorkerEvent::ExternalShortcut(shortcut.phase()));
+    }
+
+    /// `klickmeister --toggle`: stop a run, confirm a shortcut under check, or
+    /// reserve a start like a hotkey press. Toggles from before the latest
+    /// run end only stop.
+    async fn on_toggle(&mut self, toggle: u64) {
+        if self.is_running() {
+            self.cancel_start().await;
+            self.stop_run();
+            return;
+        }
+        if let ExternalShortcut::Checking { after } = self.external_shortcut {
+            // The check only confirms; it never starts a run.
+            if toggle > after {
+                self.set_external_shortcut(ExternalShortcut::Confirmed);
+                self.emit(WorkerEvent::Status(WorkerStatus::Ready));
             }
+            return;
+        }
+        if toggle <= self.old_toggles {
+            return;
+        }
+        if !self.can_stop() {
+            self.emit(WorkerEvent::Error(WorkerError::ExternalShortcutUnconfirmed));
+        } else if self.configure_task.is_some() {
+            self.emit(WorkerEvent::Error(WorkerError::HotkeyRequired));
+        } else {
+            self.request_start();
         }
     }
 
@@ -1596,6 +1751,7 @@ impl WorkerHandle {
             tx,
             control,
             closing: Arc::new(AtomicBool::new(false)),
+            toggles: Arc::new(AtomicU64::new(0)),
             join: None,
             finished,
         };

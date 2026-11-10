@@ -1,4 +1,4 @@
-use std::{path::Path, pin::Pin};
+use std::{path::Path, pin::Pin, sync::Mutex};
 
 use crate::{
     config::{self, AppConfig, ConfigError},
@@ -8,7 +8,10 @@ use crate::{
         MonitorGeometry, MouseButton, PositionMode, RepeatMode, validate_interval,
     },
     state::RunState,
-    worker::{Command, HotkeyPhase, WorkerEvent, WorkerHandle, WorkerStatus},
+    worker::{
+        Command, ExternalShortcutPhase, HotkeyPhase, Toggler, WorkerEvent, WorkerHandle,
+        WorkerStatus,
+    },
 };
 use cxx_qt::{CxxQtType, Threading};
 use cxx_qt_lib::QString;
@@ -30,6 +33,8 @@ pub mod qobject {
         #[qproperty(bool, hotkey_pending)]
         #[qproperty(bool, hotkey_configuring)]
         #[qproperty(bool, hotkey_configurable)]
+        #[qproperty(bool, external_shortcut_checking)]
+        #[qproperty(bool, external_shortcut_confirmed)]
         #[qproperty(bool, running)]
         #[qproperty(bool, busy)]
         #[qproperty(i32, countdown_remaining)]
@@ -66,6 +71,12 @@ pub mod qobject {
 
         #[qinvokable]
         fn configure_hotkey(self: Pin<&mut AppController>);
+
+        #[qinvokable]
+        fn check_external_shortcut(self: Pin<&mut AppController>);
+
+        #[qinvokable]
+        fn cancel_external_shortcut_check(self: Pin<&mut AppController>);
 
         #[qinvokable]
         fn clear_error(self: Pin<&mut AppController>);
@@ -108,6 +119,10 @@ pub struct AppControllerRust {
     hotkey_configuring: bool,
     /// False on GlobalShortcuts v1, where only the system settings change a bound hotkey.
     hotkey_configurable: bool,
+    /// The worker waits for a `klickmeister --toggle` that confirms a desktop shortcut.
+    external_shortcut_checking: bool,
+    /// A desktop shortcut for `klickmeister --toggle` stops runs instead of the portal hotkey.
+    external_shortcut_confirmed: bool,
     running: bool,
     busy: bool,
     countdown_remaining: i32,
@@ -151,6 +166,26 @@ const QML_MIN_SINGLE_INTERVAL_MS: i32 = qml_limit(ClickType::Single.min_interval
 const QML_MIN_DOUBLE_INTERVAL_MS: i32 = qml_limit(ClickType::Double.min_interval_ms());
 const QML_MAX_INTERVAL_MS: i32 = qml_limit(MAX_INTERVAL_MS);
 const QML_MAX_REPEAT_COUNT: i32 = qml_limit(MAX_REPEAT_COUNT);
+
+/// The current worker's path for `klickmeister --toggle`, which arrives on
+/// the instance thread.
+static TOGGLE_TARGET: Mutex<Option<Toggler>> = Mutex::new(None);
+
+fn set_toggle_target(target: Option<Toggler>) {
+    *TOGGLE_TARGET.lock().unwrap_or_else(|e| e.into_inner()) = target;
+}
+
+/// Hand `klickmeister --toggle` to the worker. Callable from any thread.
+pub fn deliver_toggle() -> Result<(), String> {
+    TOGGLE_TARGET
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .map_or_else(
+            || Err(messages::toggle_not_ready()),
+            |toggler| toggler.toggle().map_err(|error| error.to_string()),
+        )
+}
 
 /// An unknown click type index gets the single-click limit; starting rejects it anyway.
 fn qml_min_interval_ms(click_type: i32) -> i32 {
@@ -218,6 +253,8 @@ impl AppControllerRust {
             hotkey_pending: true,
             hotkey_configuring: false,
             hotkey_configurable: true,
+            external_shortcut_checking: false,
+            external_shortcut_confirmed: false,
             running: false,
             busy: false,
             countdown_remaining: 0,
@@ -412,6 +449,7 @@ impl Drop for AppControllerRust {
     /// Shut down the worker before destroying the Qt controller.
     fn drop(&mut self) {
         if let Some(worker) = self.worker.take() {
+            set_toggle_target(None);
             worker.shutdown();
         }
     }
@@ -426,6 +464,8 @@ impl qobject::AppController {
         self.as_mut().set_hotkey_ready(false);
         self.as_mut().set_hotkey_pending(true);
         self.as_mut().set_hotkey_configuring(false);
+        self.as_mut().set_external_shortcut_checking(false);
+        self.as_mut().set_external_shortcut_confirmed(false);
         if let Some(error) = self.as_mut().rust_mut().get_mut().startup_error.take() {
             self.as_mut().set_error_message(QString::from(&error));
         }
@@ -436,6 +476,7 @@ impl qobject::AppController {
                 controller.as_mut().handle_worker_event(worker_epoch, event);
             });
         });
+        set_toggle_target(Some(worker.toggler()));
         self.as_mut().rust_mut().get_mut().worker = Some(worker);
     }
 
@@ -491,6 +532,17 @@ impl qobject::AppController {
             self.as_mut().clear_error();
         }
         self.as_mut().send_command(Command::ConfigureHotkey);
+    }
+
+    /// Wait for one `klickmeister --toggle` that proves the desktop shortcut works.
+    pub fn check_external_shortcut(mut self: Pin<&mut Self>) {
+        self.as_mut().clear_error();
+        self.as_mut().send_command(Command::CheckExternalShortcut);
+    }
+
+    pub fn cancel_external_shortcut_check(mut self: Pin<&mut Self>) {
+        self.as_mut()
+            .send_command(Command::CancelExternalShortcutCheck);
     }
 
     pub fn clear_error(mut self: Pin<&mut Self>) {
@@ -556,6 +608,7 @@ impl qobject::AppController {
             rust.worker.take()
         };
         if let Some(worker) = worker {
+            set_toggle_target(None);
             worker.shutdown();
         }
         // The new epoch drops the old worker's final State(Closing) as well.
@@ -565,6 +618,8 @@ impl qobject::AppController {
         self.as_mut().set_hotkey_ready(false);
         self.as_mut().set_hotkey_pending(false);
         self.as_mut().set_hotkey_configuring(false);
+        self.as_mut().set_external_shortcut_checking(false);
+        self.as_mut().set_external_shortcut_confirmed(false);
         self.as_mut()
             .set_status(QString::from(&WorkerStatus::Ready.to_string()));
     }
@@ -677,6 +732,12 @@ impl qobject::AppController {
             }
             WorkerEvent::HotkeyConfigurable(configurable) => {
                 self.as_mut().set_hotkey_configurable(configurable);
+            }
+            WorkerEvent::ExternalShortcut(phase) => {
+                self.as_mut()
+                    .set_external_shortcut_checking(phase == ExternalShortcutPhase::Checking);
+                self.as_mut()
+                    .set_external_shortcut_confirmed(phase == ExternalShortcutPhase::Confirmed);
             }
             WorkerEvent::StartRequested(request) => {
                 // The worker owns the pending run; GUI flags can lag behind it.

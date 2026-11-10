@@ -8,7 +8,7 @@ use klickmeister::{
     config::ConfigError,
     eis::EisError,
     i18n::{install_translator, translate},
-    instance::InstanceError,
+    instance::{InstanceError, ToggleError},
     messages::*,
     model::ValidationError,
     portal::PortalError,
@@ -336,6 +336,37 @@ fn german_translation_keeps_every_text() {
             translate("Main", "Settings not saved"),
             "Einstellungen nicht gespeichert",
         ),
+        (
+            WorkerError::ExternalShortcutUnconfirmed.to_string(),
+            "Dein Kürzel für „klickmeister --toggle“ ist noch nicht bestätigt. Wähle „Kürzel prüfen“ und drücke es einmal.",
+        ),
+        (toggle_not_ready(), "Klickmeister ist noch nicht bereit."),
+        (unknown_action("open"), "Unbekannte Aktion: open"),
+        (
+            ToggleError::NotRunning.to_string(),
+            "Klickmeister läuft nicht. Öffne zuerst Klickmeister.",
+        ),
+        (
+            ToggleError::Refused("Testfehler".to_owned()).to_string(),
+            "Klickmeister hat den Befehl nicht angenommen: Testfehler",
+        ),
+        (
+            ToggleError::Timeout.to_string(),
+            "Klickmeister antwortet nicht. Der Befehl wurde eventuell nicht ausgeführt.",
+        ),
+        (
+            ToggleError::Thread(io::Error::other("Testfehler")).to_string(),
+            "Klickmeister ließ sich nicht erreichen: Testfehler",
+        ),
+        (
+            ToggleError::NoSessionBus(zbus::Error::Failure("Testfehler".to_owned())).to_string(),
+            "Die D-Bus-Sitzung ist nicht erreichbar: Testfehler",
+        ),
+        (
+            translate("Main", "Own shortcut (klickmeister --toggle)"),
+            "Eigenes Kürzel (klickmeister --toggle)",
+        ),
+        (translate("Main", "Check shortcut"), "Kürzel prüfen"),
     ];
     for (shown, expected) in shown {
         assert_eq!(shown, expected);

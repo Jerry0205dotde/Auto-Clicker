@@ -19,6 +19,9 @@ Kirigami.ApplicationWindow {
     property bool discardSettingsOnClose: false
     readonly property bool fixedPosition: !controller.current_position
     readonly property bool controlsEnabled: !controller.running && !controller.busy
+    // A desktop shortcut for `klickmeister --toggle` replaces a missing portal hotkey.
+    readonly property bool usesExternalShortcut: !controller.hotkey_ready && !controller.hotkey_pending
+        && controller.external_shortcut_confirmed
     readonly property var monitorOptions: {
         const screens = Qt.application.screens
         const options = []
@@ -366,7 +369,9 @@ Kirigami.ApplicationWindow {
                     Layout.fillWidth: true
                     text: controller.hotkey_configuring ? qsTr("Opening dialog…") :
                           controller.hotkey_pending ? qsTr("Setting up…") :
-                              (controller.hotkey_ready ? controller.hotkey : qsTr("Not available"))
+                          controller.hotkey_ready ? controller.hotkey :
+                          root.usesExternalShortcut ? qsTr("Own shortcut (klickmeister --toggle)")
+                              : qsTr("Not available")
                     elide: Text.ElideRight
                     Accessible.name: qsTr("Shortcut: %1").arg(text)
                 }
@@ -386,6 +391,20 @@ Kirigami.ApplicationWindow {
                     Controls.ToolTip.visible: hovered
                     Controls.ToolTip.delay: Kirigami.Units.toolTipDelay
                 }
+                // In the footer, so a long error above cannot scroll it away.
+                Controls.ToolButton {
+                    objectName: "externalShortcutButton"
+                    visible: externalShortcutMessage.visible
+                    icon.name: controller.external_shortcut_checking ? "dialog-cancel" : "dialog-ok"
+                    text: controller.external_shortcut_checking ? qsTr("Cancel") : qsTr("Check shortcut")
+                    enabled: root.controlsEnabled
+                    onClicked: controller.external_shortcut_checking
+                        ? controller.cancel_external_shortcut_check()
+                        : controller.check_external_shortcut()
+                    Controls.ToolTip.text: qsTr("Check whether your shortcut for “klickmeister --toggle” arrives")
+                    Controls.ToolTip.visible: hovered
+                    Controls.ToolTip.delay: Kirigami.Units.toolTipDelay
+                }
             }
 
             Controls.Button {
@@ -400,6 +419,7 @@ Kirigami.ApplicationWindow {
                 text: countdown > 0 ? qsTr("■  Cancel start (%1)").arg(countdown)
                     : stopMode ? qsTr("■  Stop") : qsTr("▶  Start")
                 enabled: stopMode || (controller.hotkey_ready && !controller.hotkey_pending)
+                    || (controller.external_shortcut_confirmed && !controller.hotkey_configuring)
                 Accessible.name: countdown > 1 ? qsTr("Cancel start, clicking begins in %1 seconds").arg(countdown)
                     : countdown === 1 ? qsTr("Cancel start, clicking begins in 1 second")
                     : stopMode ? qsTr("Stop") : qsTr("Start")
@@ -477,6 +497,20 @@ Kirigami.ApplicationWindow {
                     type: Kirigami.MessageType.Information
                     text: qsTr("This desktop portal cannot change the shortcut from within Klickmeister. Change it in System Settings under “Shortcuts”.")
                     showCloseButton: true
+                }
+                // Without a portal hotkey, a shortcut from the desktop's settings
+                // can start and stop runs once it has been pressed in a check.
+                Kirigami.InlineMessage {
+                    id: externalShortcutMessage
+                    objectName: "externalShortcutMessage"
+                    Layout.fillWidth: true
+                    visible: controller.external_shortcut_checking
+                        || (!controller.hotkey_ready && !controller.hotkey_pending
+                            && !controller.external_shortcut_confirmed)
+                    type: Kirigami.MessageType.Information
+                    text: controller.external_shortcut_checking
+                        ? qsTr("Press your shortcut for “klickmeister --toggle” now. This only checks that it arrives; nothing is clicked.")
+                        : qsTr("Without a shortcut from the desktop portal, you can set up your own: in System Settings under “Shortcuts”, add a shortcut for the command “klickmeister --toggle”, then choose “Check shortcut” below. Only then can a run start, because the shortcut also stops it.")
                 }
             }
         }

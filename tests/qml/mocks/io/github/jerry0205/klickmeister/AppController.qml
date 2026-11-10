@@ -9,6 +9,8 @@ QtObject {
     property bool hotkey_pending: false
     property bool hotkey_configuring: false
     property bool hotkey_configurable: true
+    property bool external_shortcut_checking: false
+    property bool external_shortcut_confirmed: false
     property int configureCount: 0
     property bool running: false
     property bool busy: false
@@ -52,6 +54,8 @@ QtObject {
         hotkey_ready = false
         hotkey_pending = true
         hotkey_configuring = false
+        external_shortcut_checking = false
+        external_shortcut_confirmed = false
     }
     function shutdown() {
         shutdownCount++
@@ -61,6 +65,8 @@ QtObject {
         hotkey_ready = false
         hotkey_pending = false
         hotkey_configuring = false
+        external_shortcut_checking = false
+        external_shortcut_confirmed = false
     }
     function begin_close() {
         closing = true
@@ -103,5 +109,10 @@ QtObject {
         if (!deferStop) { running = false; busy = false; countdown_remaining = 0 }
     }
     function configure_hotkey() { configureCount++ }
+    // The worker reports the phase later; tests set it like the worker would.
+    property int checkCount: 0
+    property int cancelCheckCount: 0
+    function check_external_shortcut() { checkCount++ }
+    function cancel_external_shortcut_check() { cancelCheckCount++ }
     function clear_error() { error_message = "" }
 }
