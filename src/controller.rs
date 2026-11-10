@@ -2,12 +2,13 @@ use std::{path::Path, pin::Pin};
 
 use crate::{
     config::{self, AppConfig, ConfigError},
+    messages::{ERROR_STATUS, countdown_status},
     model::{
         ClickSettings, ClickType, MAX_COORDINATE, MAX_INTERVAL_MS, MAX_REPEAT_COUNT,
         MonitorGeometry, MouseButton, PositionMode, RepeatMode, validate_interval,
     },
     state::RunState,
-    worker::{Command, HotkeyPhase, WorkerEvent, WorkerHandle},
+    worker::{Command, HotkeyPhase, WorkerEvent, WorkerHandle, WorkerStatus},
 };
 use cxx_qt::{CxxQtType, Threading};
 use cxx_qt_lib::QString;
@@ -214,7 +215,7 @@ impl Default for AppControllerRust {
 impl AppControllerRust {
     fn from_config(config: AppConfig, startup_error: Option<String>) -> Self {
         Self {
-            status: QString::from("Bereit"),
+            status: QString::from(&WorkerStatus::Ready.to_string()),
             error_message: QString::default(),
             hotkey: QString::from(&config.hotkey),
             hotkey_ready: false,
@@ -568,7 +569,8 @@ impl qobject::AppController {
         self.as_mut().set_hotkey_ready(false);
         self.as_mut().set_hotkey_pending(false);
         self.as_mut().set_hotkey_configuring(false);
-        self.as_mut().set_status(QString::from("Bereit"));
+        self.as_mut()
+            .set_status(QString::from(&WorkerStatus::Ready.to_string()));
     }
 
     /// Hand a command to the worker and surface delivery failures.
@@ -577,16 +579,19 @@ impl qobject::AppController {
     /// shown run state alone unless the worker has ended.
     fn send_command(mut self: Pin<&mut Self>, command: Command) {
         let worker = self.rust().worker.as_ref();
-        let result = worker
-            .ok_or("Die Klicksteuerung ist nicht verfügbar. Starte Klickmeister neu.")
-            .and_then(|worker| worker.send(command));
+        let result = match worker {
+            Some(worker) => worker.send(command).map_err(|error| error.to_string()),
+            None => {
+                Err("Die Klicksteuerung ist nicht verfügbar. Starte Klickmeister neu.".to_owned())
+            }
+        };
         if let Err(error) = result {
             if send_failure_ends_run(worker) {
                 self.as_mut().set_running(false);
                 self.as_mut().set_busy(false);
                 self.as_mut().set_countdown_remaining(0);
             }
-            self.as_mut().show_error(error);
+            self.as_mut().show_error(&error);
         }
     }
 
@@ -636,7 +641,7 @@ impl qobject::AppController {
     /// Display an error without replacing an active worker status.
     fn show_error(mut self: Pin<&mut Self>, message: &str) {
         if should_mark_status_as_error(*self.running(), *self.busy()) {
-            self.as_mut().set_status(QString::from("Fehler"));
+            self.as_mut().set_status(QString::from(ERROR_STATUS));
         }
         self.as_mut().set_error_message(QString::from(message));
     }
@@ -655,12 +660,11 @@ impl qobject::AppController {
             WorkerEvent::Countdown(remaining) => {
                 // The run is already `Starting`; the worker ends the countdown via `State`.
                 self.as_mut().set_countdown_remaining(i32::from(remaining));
-                self.as_mut().set_status(QString::from(&format!(
-                    "Start in {remaining} s · Bewege den Mauszeiger zum Ziel."
-                )));
+                self.as_mut()
+                    .set_status(QString::from(&countdown_status(remaining)));
             }
             WorkerEvent::Status(status) => {
-                self.as_mut().set_status(QString::from(&status));
+                self.as_mut().set_status(QString::from(&status.to_string()));
             }
             WorkerEvent::State(state) => {
                 let (running, busy) = run_indicators(state);
@@ -695,7 +699,7 @@ impl qobject::AppController {
                     request.start(settings);
                 }
             }
-            WorkerEvent::Error(error) => self.as_mut().show_error(&error),
+            WorkerEvent::Error(error) => self.as_mut().show_error(&error.to_string()),
         }
     }
 }

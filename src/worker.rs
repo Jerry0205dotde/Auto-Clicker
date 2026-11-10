@@ -40,6 +40,7 @@ use tokio::{
 
 use crate::{
     input::{ClickSession, PlatformClickSession},
+    messages::HOTKEY_DESCRIPTION,
     model::{ClickSettings, ValidationError},
     parent_window,
     portal::{register_connection, watch_portal_owner},
@@ -54,14 +55,6 @@ const PORTAL_CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
 /// sessions, and the controller drops its events via the worker epoch.
 const SHUTDOWN_WAIT: Duration = Duration::from_secs(5);
 const HOTKEY_ID: &str = "toggle-clicking";
-const HOTKEY_SESSION_CLOSED: &str =
-    "Die Freigabe für das Tastenkürzel wurde beendet. Wähle „Erneut versuchen“.";
-const HOTKEY_REQUEST_CANCELLED: &str = "Die Freigabe für das Tastenkürzel wurde abgebrochen.";
-const HOTKEY_SESSION_MISSING: &str =
-    "Die Freigabe für das Tastenkürzel fehlt. Wähle „Erneut versuchen“.";
-const HOTKEY_UNBOUND: &str =
-    "Kein Tastenkürzel für Start und Stopp eingerichtet. Wähle unter „Tastenkürzel“ eine Taste.";
-const HOTKEY_REGISTERING: &str = "Tastenkürzel wird eingerichtet …";
 const BUTTON_START_DELAY_SECS: u8 = 3;
 /// How long the mouse permission outlives a run. A start within this time
 /// needs no new KDE dialog; afterwards KDE's remote control indicator and any
@@ -70,7 +63,6 @@ const CLICK_SESSION_IDLE: Duration = Duration::from_secs(60);
 /// Suggested key in the XDG shortcut format. The saved hotkey is KDE's
 /// localized description ("Strg+F8") and only fit for display.
 const PREFERRED_TRIGGER: &str = "Pause";
-const WORKER_STOPPED: &str = "Die Klicksteuerung wurde beendet. Starte Klickmeister neu.";
 
 #[derive(Debug)]
 pub enum Command {
@@ -83,7 +75,7 @@ pub enum Command {
 
 #[derive(Debug)]
 pub enum WorkerEvent {
-    Status(String),
+    Status(WorkerStatus),
     State(RunState),
     /// Seconds left before a button-started run clicks; the state stays `Starting`.
     Countdown(u8),
@@ -93,8 +85,84 @@ pub enum WorkerEvent {
     HotkeyConfigurable(bool),
     /// Reserved hotkey start: return current Qt settings, or drop to decline.
     StartRequested(StartRequest),
-    Error(String),
+    Error(WorkerError),
 }
+
+/// What the worker is doing. `messages` turns it into the shown status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkerStatus {
+    Ready,
+    RegisteringHotkey,
+    /// The hotkey settings closed without a bound hotkey.
+    AwaitingHotkey,
+    AwaitingClickPermission,
+    /// The mouse permission ended between runs; the next start asks again.
+    PermissionRequired,
+    Clicking,
+    Stopped,
+}
+
+/// Why a start or the worker failed. `messages` turns it into the shown text.
+#[derive(Debug)]
+pub enum WorkerError {
+    /// The worker thread or its runtime could not start.
+    WorkerStartFailed(String),
+    /// A start arrived without a bound hotkey or while its settings are open.
+    HotkeyRequired,
+    InvalidSettings(ValidationError),
+    Click(ClickError),
+    /// The task that requests the mouse permission failed.
+    ClickTaskFailed(String),
+    /// A run had no mouse permission when its next click was due.
+    ClickSessionLost,
+    Hotkey(HotkeyError),
+}
+
+/// The error of this build's click backend.
+pub type ClickError = <PlatformClickSession as ClickSession>::Error;
+
+/// Why the hotkey cannot be used. Fields hold the technical details.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HotkeyError {
+    SessionClosed,
+    RequestCancelled,
+    SessionMissing,
+    Unbound,
+    /// The portal reported that the hotkey has no trigger any more.
+    Removed,
+    Setup(String),
+    Registration(String),
+    Unavailable(String),
+    WatchUnavailable,
+    SubscribeTimeout,
+    Receive(String),
+    Request(String),
+    NotGranted(String),
+    SettingsUnavailable(String),
+}
+
+/// Why `WorkerHandle::send` could not deliver a command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SendError {
+    Closing,
+    Busy,
+    Stopped,
+}
+
+impl std::error::Error for WorkerError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InvalidSettings(error) => Some(error),
+            Self::Click(error) => Some(error),
+            Self::Hotkey(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+impl std::error::Error for HotkeyError {}
+
+impl std::error::Error for SendError {}
 
 /// A single-use reply to one hotkey activation, with its own cancellation identity.
 /// Dropping it declines the start, including when Qt cannot queue the event.
@@ -220,16 +288,16 @@ impl WorkerHandle {
     }
 
     /// Queue Start and ConfigureHotkey; Stop and Shutdown never wait for queue space.
-    pub fn send(&self, command: Command) -> Result<(), &'static str> {
+    pub fn send(&self, command: Command) -> Result<(), SendError> {
         if self.closing.load(Ordering::Acquire) {
-            return Err("Klickmeister wird geschlossen.");
+            return Err(SendError::Closing);
         }
         let command = match command {
             Command::Stop => {
                 let mut control = *self.control.borrow();
                 control.stops = control.stops.wrapping_add(1);
                 // Fails only when the worker loop has ended.
-                return self.control.send(control).map_err(|_| WORKER_STOPPED);
+                return self.control.send(control).map_err(|_| SendError::Stopped);
             }
             Command::Shutdown => {
                 self.request_shutdown();
@@ -251,8 +319,8 @@ impl WorkerHandle {
             Command::ConfigureHotkey => QueuedCommand::ConfigureHotkey,
         };
         self.tx.try_send(command).map_err(|error| match error {
-            TrySendError::Full(_) => "Klickmeister ist ausgelastet. Versuche es erneut.",
-            TrySendError::Closed(_) => WORKER_STOPPED,
+            TrySendError::Full(_) => SendError::Busy,
+            TrySendError::Closed(_) => SendError::Stopped,
         })
     }
 
@@ -304,13 +372,11 @@ impl Drop for WorkerHandle {
 }
 
 fn worker_start_failed(error: &dyn fmt::Display) -> WorkerEvent {
-    WorkerEvent::Error(format!(
-        "Die Klicksteuerung konnte nicht gestartet werden: {error}"
-    ))
+    WorkerEvent::Error(WorkerError::WorkerStartFailed(error.to_string()))
 }
 
-fn hotkey_settings_error(error: impl fmt::Display) -> String {
-    format!("Die Einstellungen für das Tastenkürzel konnten nicht geöffnet werden: {error}")
+fn hotkey_settings_error(error: impl fmt::Display) -> HotkeyError {
+    HotkeyError::SettingsUnavailable(error.to_string())
 }
 
 fn block_on_runtime(
@@ -491,52 +557,53 @@ fn bound_trigger(shortcuts: &[Shortcut]) -> Option<String> {
 /// poll that returns its successful result.
 async fn while_hotkey_open<T>(
     closed: &mut HotkeyClosedWatcher,
-    operation: impl std::future::Future<Output = Result<T, String>>,
-) -> Result<T, String> {
+    operation: impl std::future::Future<Output = Result<T, HotkeyError>>,
+) -> Result<T, HotkeyError> {
     if closed.is_terminated() {
-        return Err(HOTKEY_SESSION_CLOSED.to_owned());
+        return Err(HotkeyError::SessionClosed);
     }
     let result = tokio::select! {
         biased;
-        _ = closed.as_mut() => return Err(HOTKEY_SESSION_CLOSED.to_owned()),
+        _ = closed.as_mut() => return Err(HotkeyError::SessionClosed),
         result = operation => result,
     };
     if closed.as_mut().now_or_never().is_some() {
-        return Err(HOTKEY_SESSION_CLOSED.to_owned());
+        return Err(HotkeyError::SessionClosed);
     }
     result
 }
 
 /// Bind the stop hotkey on an owned connection and clean up failed or cancelled requests.
-async fn setup_hotkey(mut cancel: oneshot::Receiver<()>) -> Result<HotkeyRegistration, String> {
+async fn setup_hotkey(
+    mut cancel: oneshot::Receiver<()>,
+) -> Result<HotkeyRegistration, HotkeyError> {
     let connection = tokio::select! {
         biased;
-        _ = &mut cancel => return Err(HOTKEY_REQUEST_CANCELLED.to_owned()),
-        result = ashpd::zbus::Connection::session() => result.map_err(|error| format!("Das Tastenkürzel konnte nicht eingerichtet werden: {error}"))?,
+        _ = &mut cancel => return Err(HotkeyError::RequestCancelled),
+        result = ashpd::zbus::Connection::session() => result.map_err(|error| HotkeyError::Setup(error.to_string()))?,
     };
     let mut session = None;
     let operation = async {
-        register_connection(&connection).await.map_err(|error| {
-            format!("Klickmeister konnte nicht beim KDE-Portaldienst angemeldet werden: {error}")
-        })?;
+        register_connection(&connection)
+            .await
+            .map_err(|error| HotkeyError::Registration(error.to_string()))?;
         let portal = GlobalShortcuts::with_connection(connection.clone())
             .await
-            .map_err(|error| format!("Tastenkürzel sind nicht verfügbar. Prüfe den KDE-Portaldienst. Details: {error}"))?;
-        let (portal_owner, owner_lost) =
-            watch_portal_owner(&connection).await.map_err(|error| {
-                format!("Das Tastenkürzel konnte nicht eingerichtet werden: {error}")
-            })?;
+            .map_err(|error| HotkeyError::Unavailable(error.to_string()))?;
+        let (portal_owner, owner_lost) = watch_portal_owner(&connection)
+            .await
+            .map_err(|error| HotkeyError::Setup(error.to_string()))?;
         let mut owner_lost = Box::pin(owner_lost);
         // A vanished portal never sends the Response to its pending request.
         let created = tokio::select! {
             biased;
-            () = &mut owner_lost => return Err(HOTKEY_SESSION_CLOSED.to_owned()),
+            () = &mut owner_lost => return Err(HotkeyError::SessionClosed),
             result = portal.create_session(Default::default()) => result,
         };
-        session = Some(Arc::new(created.map_err(|error| {
-            format!("Das Tastenkürzel konnte nicht eingerichtet werden: {error}")
-        })?));
-        let owned_session = session.as_ref().ok_or(HOTKEY_SESSION_MISSING)?;
+        session = Some(Arc::new(
+            created.map_err(|error| HotkeyError::Setup(error.to_string()))?,
+        ));
+        let owned_session = session.as_ref().ok_or(HotkeyError::SessionMissing)?;
         let watched_session = Arc::clone(owned_session);
         let (ready_tx, ready_rx) = oneshot::channel();
         let mut closed: HotkeyClosedWatcher = Box::pin(
@@ -554,7 +621,7 @@ async fn setup_hotkey(mut cancel: oneshot::Receiver<()>) -> Result<HotkeyRegistr
             .fuse(),
         );
         if !register_hotkey_watcher(ready_rx, &mut closed).await {
-            return Err("Die Freigabe für das Tastenkürzel kann nicht überwacht werden. Wähle „Erneut versuchen“.".to_owned());
+            return Err(HotkeyError::WatchUnavailable);
         }
         // ashpd adds the match rules only when subscribing. Subscribe before
         // binding, so no change the portal sends after its response is lost.
@@ -567,14 +634,13 @@ async fn setup_hotkey(mut cancel: oneshot::Receiver<()>) -> Result<HotkeyRegistr
                 Ok::<_, ashpd::Error>((activations, changes))
             })
             .await
-            .map_err(|_| "Zeitüberschreitung beim Einrichten des Tastenkürzels.".to_owned())?
-            .map_err(|error| format!("Das Tastenkürzel kann nicht empfangen werden: {error}"))
+            .map_err(|_| HotkeyError::SubscribeTimeout)?
+            .map_err(|error| HotkeyError::Receive(error.to_string()))
         })
         .await?;
         let binding = async {
-            let shortcut =
-                NewShortcut::new(HOTKEY_ID, "Automatisches Klicken starten oder stoppen")
-                    .preferred_trigger(Some(PREFERRED_TRIGGER));
+            let shortcut = NewShortcut::new(HOTKEY_ID, HOTKEY_DESCRIPTION)
+                .preferred_trigger(Some(PREFERRED_TRIGGER));
             let parent = parent_window::identifier().await;
             let response = portal
                 .bind_shortcuts(
@@ -584,18 +650,14 @@ async fn setup_hotkey(mut cancel: oneshot::Receiver<()>) -> Result<HotkeyRegistr
                     BindShortcutsOptions::default(),
                 )
                 .await
-                .map_err(|error| {
-                    format!(
-                        "Die Freigabe für das Tastenkürzel konnte nicht angefordert werden: {error}"
-                    )
-                })?
+                .map_err(|error| HotkeyError::Request(error.to_string()))?
                 .response()
-                .map_err(|error| format!("Das Tastenkürzel wurde nicht freigegeben: {error}"))?;
+                .map_err(|error| HotkeyError::NotGranted(error.to_string()))?;
             let shortcut = response
                 .shortcuts()
                 .iter()
                 .find(|shortcut| shortcut.id() == HOTKEY_ID)
-                .ok_or_else(|| HOTKEY_UNBOUND.to_owned())?;
+                .ok_or(HotkeyError::Unbound)?;
             let actual = (!shortcut.trigger_description().trim().is_empty())
                 .then(|| shortcut.trigger_description().to_owned());
             Ok(actual)
@@ -616,7 +678,7 @@ async fn setup_hotkey(mut cancel: oneshot::Receiver<()>) -> Result<HotkeyRegistr
     };
     let result = tokio::select! {
         biased;
-        _ = &mut cancel => Err(HOTKEY_REQUEST_CANCELLED.to_owned()),
+        _ = &mut cancel => Err(HotkeyError::RequestCancelled),
         result = operation => result,
     };
     match result {
@@ -627,7 +689,7 @@ async fn setup_hotkey(mut cancel: oneshot::Receiver<()>) -> Result<HotkeyRegistr
             closed,
             signals,
             actual,
-            session: session.ok_or(HOTKEY_SESSION_MISSING)?,
+            session: session.ok_or(HotkeyError::SessionMissing)?,
         }),
         Err(error) => {
             if let Some(session) = session {
@@ -641,7 +703,7 @@ async fn setup_hotkey(mut cancel: oneshot::Receiver<()>) -> Result<HotkeyRegistr
 
 /// Cancel registration and close even a session completed just before cancellation.
 async fn cancel_hotkey(
-    task: &mut Option<JoinHandle<Result<HotkeyRegistration, String>>>,
+    task: &mut Option<JoinHandle<Result<HotkeyRegistration, HotkeyError>>>,
     cancel: &mut Option<oneshot::Sender<()>>,
 ) {
     if let Some(cancel) = cancel.take() {
@@ -657,7 +719,7 @@ async fn cancel_hotkey(
 
 /// Keep the owner alive until its pending dialog/session has been closed.
 async fn cancel_start(
-    task: &mut Option<JoinHandle<Result<StartedSession, String>>>,
+    task: &mut Option<JoinHandle<Result<StartedSession, Box<ClickError>>>>,
     cancel: &mut Option<oneshot::Sender<()>>,
 ) {
     if let Some(cancel) = cancel.take() {
@@ -676,10 +738,10 @@ async fn setup_click_session(
     settings: ClickSettings,
     delay: bool,
     cancel: oneshot::Receiver<()>,
-) -> Result<StartedSession, String> {
+) -> Result<StartedSession, Box<ClickError>> {
     let session = PlatformClickSession::create(settings.monitor, cancel)
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(Box::new)?;
     Ok(StartedSession {
         session,
         settings,
@@ -732,13 +794,11 @@ async fn discard_closed_click_session(
     }
     if was_running {
         fail_run(machine, emit);
-        (emit)(WorkerEvent::Error(
-            PlatformClickSession::closed_error().to_string(),
-        ));
+        (emit)(WorkerEvent::Error(WorkerError::Click(
+            PlatformClickSession::closed_error(),
+        )));
     } else {
-        (emit)(WorkerEvent::Status(
-            "Freigabe erneut erforderlich".to_owned(),
-        ));
+        (emit)(WorkerEvent::Status(WorkerStatus::PermissionRequired));
     }
     was_running
 }
@@ -772,9 +832,9 @@ enum Wake {
     ClickSessionIdle,
     Command(Option<QueuedCommand>),
     StartReply(Result<ClickSettings, oneshot::error::RecvError>),
-    StartTask(Result<Result<StartedSession, String>, tokio::task::JoinError>),
-    HotkeyTask(Result<Result<HotkeyRegistration, String>, tokio::task::JoinError>),
-    ConfigureTask(Result<Result<(), String>, tokio::task::JoinError>),
+    StartTask(Result<Result<StartedSession, Box<ClickError>>, tokio::task::JoinError>),
+    HotkeyTask(Result<Result<HotkeyRegistration, HotkeyError>, tokio::task::JoinError>),
+    ConfigureTask(Result<Result<(), HotkeyError>, tokio::task::JoinError>),
     Hotkey(Option<HotkeySignal>),
     CountdownTick,
     ClickTick,
@@ -786,9 +846,9 @@ struct WakeSources<'a> {
     click_session: &'a mut Option<PlatformClickSession>,
     commands: &'a mut mpsc::Receiver<QueuedCommand>,
     start_request: &'a mut Option<PendingStartRequest>,
-    start_task: &'a mut Option<JoinHandle<Result<StartedSession, String>>>,
-    hotkey_task: &'a mut Option<JoinHandle<Result<HotkeyRegistration, String>>>,
-    configure_task: &'a mut Option<JoinHandle<Result<(), String>>>,
+    start_task: &'a mut Option<JoinHandle<Result<StartedSession, Box<ClickError>>>>,
+    hotkey_task: &'a mut Option<JoinHandle<Result<HotkeyRegistration, HotkeyError>>>,
+    configure_task: &'a mut Option<JoinHandle<Result<(), HotkeyError>>>,
     hotkey: &'a mut Option<HotkeyState>,
     countdown: Option<Instant>,
     tick: Option<Instant>,
@@ -845,18 +905,18 @@ async fn run_worker(
     let mut click_session_idle: Option<Instant> = None;
     let mut active: Option<ActiveRun> = None;
     let mut countdown: Option<PendingCountdown> = None;
-    let mut start_task: Option<JoinHandle<Result<StartedSession, String>>> = None;
+    let mut start_task: Option<JoinHandle<Result<StartedSession, Box<ClickError>>>> = None;
     let mut start_cancel = None;
     let mut start_request: Option<PendingStartRequest> = None;
     let (tx, rx) = oneshot::channel();
     let mut hotkey_cancel = Some(tx);
     let mut hotkey_task = Some(tokio::spawn(setup_hotkey(rx)));
-    let mut configure_task: Option<JoinHandle<Result<(), String>>> = None;
+    let mut configure_task: Option<JoinHandle<Result<(), HotkeyError>>> = None;
     let mut hotkey: Option<HotkeyState> = None;
     let mut hotkey_bound = false;
 
     (emit)(WorkerEvent::State(machine.state()));
-    (emit)(WorkerEvent::Status(HOTKEY_REGISTERING.to_owned()));
+    (emit)(WorkerEvent::Status(WorkerStatus::RegisteringHotkey));
     (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Registering));
     let mut ended_runs = machine.ended_runs();
     let mut barrier_stops = control.borrow().stops;
@@ -962,7 +1022,7 @@ async fn run_worker(
                         }
                         let delay = from_button && settings.position.is_none();
                         if !hotkey_bound || configure_task.is_some() {
-                            (emit)(WorkerEvent::Error("Richte vor dem Start ein Tastenkürzel für Start und Stopp ein.".to_owned()));
+                            (emit)(WorkerEvent::Error(WorkerError::HotkeyRequired));
                             continue;
                         }
                         if click_session.as_mut().is_some_and(PlatformClickSession::is_closed)
@@ -977,7 +1037,7 @@ async fn run_worker(
                             Ok(false) => continue,
                             Err(error) => {
                                 (emit)(WorkerEvent::State(machine.state()));
-                                (emit)(WorkerEvent::Error(error.to_string()));
+                                (emit)(WorkerEvent::Error(WorkerError::InvalidSettings(error)));
                                 continue;
                             }
                         }
@@ -987,7 +1047,7 @@ async fn run_worker(
                             if let Some(old_session) = click_session.take() {
                                 old_session.close().await;
                             }
-                            (emit)(WorkerEvent::Status("Warte auf Freigabe für Maussteuerung …".to_owned()));
+                            (emit)(WorkerEvent::Status(WorkerStatus::AwaitingClickPermission));
                             let (tx, rx) = oneshot::channel();
                             start_cancel = Some(tx);
                             start_task = Some(tokio::spawn(setup_click_session(settings, delay, rx)));
@@ -1032,7 +1092,7 @@ async fn run_worker(
                             hotkey_cancel = Some(tx);
                             hotkey_task = Some(tokio::spawn(setup_hotkey(rx)));
                             (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Registering));
-                            (emit)(WorkerEvent::Status(HOTKEY_REGISTERING.to_owned()));
+                            (emit)(WorkerEvent::Status(WorkerStatus::RegisteringHotkey));
                         }
                     }
                 }
@@ -1045,7 +1105,7 @@ async fn run_worker(
                         if session.is_closed() {
                             session.close().await;
                             fail_run(&mut machine, &emit);
-                            (emit)(WorkerEvent::Error(PlatformClickSession::closed_error().to_string()));
+                            (emit)(WorkerEvent::Error(WorkerError::Click(PlatformClickSession::closed_error())));
                         } else {
                             click_session = Some(session);
                             begin_run(&mut machine, &mut active, &mut countdown, settings, delay, &emit);
@@ -1053,14 +1113,14 @@ async fn run_worker(
                     }
                     Ok(Err(error)) => {
                         fail_run(&mut machine, &emit);
-                        (emit)(WorkerEvent::Error(error));
+                        (emit)(WorkerEvent::Error(WorkerError::Click(*error)));
                     }
                     Err(error) if error.is_cancelled() => {
                         stop_run(&mut machine, &mut active, &mut countdown, &emit);
                     }
                     Err(error) => {
                         fail_run(&mut machine, &emit);
-                        (emit)(WorkerEvent::Error(format!("Die Maussteuerung konnte nicht gestartet werden: {error}")));
+                        (emit)(WorkerEvent::Error(WorkerError::ClickTaskFailed(error.to_string())));
                     }
                 }
             }
@@ -1091,21 +1151,21 @@ async fn run_worker(
                             (emit)(WorkerEvent::Hotkey(actual));
                             (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Ready));
                             if matches!(machine.state(), RunState::Ready | RunState::Stopped | RunState::Error) {
-                                (emit)(WorkerEvent::Status("Bereit".to_owned()));
+                                (emit)(WorkerEvent::Status(WorkerStatus::Ready));
                             }
                         } else {
                             hotkey_bound = false;
                             (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable));
-                            (emit)(WorkerEvent::Error(HOTKEY_UNBOUND.to_owned()));
+                            (emit)(WorkerEvent::Error(WorkerError::Hotkey(HotkeyError::Unbound)));
                         }
                     }
                     Ok(Err(error)) => {
                         (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable));
-                        (emit)(WorkerEvent::Error(error));
+                        (emit)(WorkerEvent::Error(WorkerError::Hotkey(error)));
                     }
                     Err(error) if !error.is_cancelled() => {
                         (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable));
-                        (emit)(WorkerEvent::Error(format!("Das Tastenkürzel konnte nicht eingerichtet werden: {error}")));
+                        (emit)(WorkerEvent::Error(WorkerError::Hotkey(HotkeyError::Setup(error.to_string()))));
                     }
                     Err(_) => (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable)),
                 }
@@ -1117,21 +1177,21 @@ async fn run_worker(
                 (emit)(WorkerEvent::HotkeyPhase(if hotkey_bound { HotkeyPhase::Ready } else { HotkeyPhase::Unavailable }));
                 match result {
                     Ok(Ok(())) if hotkey_bound && !matches!(machine.state(), RunState::Starting | RunState::Clicking) => {
-                        (emit)(WorkerEvent::Status("Bereit".to_owned()));
+                        (emit)(WorkerEvent::Status(WorkerStatus::Ready));
                     }
                     Ok(Ok(())) if !hotkey_bound => {
-                        (emit)(WorkerEvent::Status("Warte auf Tastenkürzel für Start und Stopp …".to_owned()));
+                        (emit)(WorkerEvent::Status(WorkerStatus::AwaitingHotkey));
                     }
                     Ok(Ok(())) => {}
                     Ok(Err(error)) => {
                         cancel_start(&mut start_task, &mut start_cancel).await;
                         abort_run(&mut machine, &mut active, &mut countdown, &emit);
-                        (emit)(WorkerEvent::Error(error));
+                        (emit)(WorkerEvent::Error(WorkerError::Hotkey(error)));
                     }
                     Err(error) if !error.is_cancelled() => {
                         cancel_start(&mut start_task, &mut start_cancel).await;
                         abort_run(&mut machine, &mut active, &mut countdown, &emit);
-                        (emit)(WorkerEvent::Error(hotkey_settings_error(error)));
+                        (emit)(WorkerEvent::Error(WorkerError::Hotkey(hotkey_settings_error(error))));
                     }
                     Err(_) => {}
                 }
@@ -1169,14 +1229,14 @@ async fn run_worker(
                             (emit)(WorkerEvent::Hotkey(trigger));
                             (emit)(WorkerEvent::HotkeyPhase(if configure_task.is_some() { HotkeyPhase::Configuring(true) } else { HotkeyPhase::Ready }));
                             if configure_task.is_none() && !matches!(machine.state(), RunState::Starting | RunState::Clicking) {
-                                (emit)(WorkerEvent::Status("Bereit".to_owned()));
+                                (emit)(WorkerEvent::Status(WorkerStatus::Ready));
                             }
                         } else {
                             cancel_start(&mut start_task, &mut start_cancel).await;
                             abort_run(&mut machine, &mut active, &mut countdown, &emit);
                             hotkey_bound = false;
                             (emit)(WorkerEvent::HotkeyPhase(if configure_task.is_some() { HotkeyPhase::Configuring(false) } else { HotkeyPhase::Unavailable }));
-                            (emit)(WorkerEvent::Error("Das Tastenkürzel für Start und Stopp wurde entfernt. Wähle „Erneut versuchen“.".to_owned()));
+                            (emit)(WorkerEvent::Error(WorkerError::Hotkey(HotkeyError::Removed)));
                         }
                     }
                     Some(HotkeySignal::Activated(..)) => {}
@@ -1186,7 +1246,7 @@ async fn run_worker(
                         if let Some(task) = configure_task.take() { task.abort(); }
                         hotkey_bound = false;
                         (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable));
-                        (emit)(WorkerEvent::Error(HOTKEY_SESSION_CLOSED.to_owned()));
+                        (emit)(WorkerEvent::Error(WorkerError::Hotkey(HotkeyError::SessionClosed)));
                         if let Some(state) = hotkey.take() {
                             let _ = timeout(PORTAL_CLOSE_TIMEOUT, state.connection.close()).await;
                         }
@@ -1212,7 +1272,7 @@ async fn run_worker(
                 let Some(session) = click_session.as_mut() else {
                     fail_run(&mut machine, &emit);
                     active = None;
-                    (emit)(WorkerEvent::Error("Die Freigabe für die Maussteuerung wurde unerwartet beendet. Versuche den Start erneut.".to_owned()));
+                    (emit)(WorkerEvent::Error(WorkerError::ClickSessionLost));
                     continue;
                 };
                 if !run.schedule.record_tick() {
@@ -1222,7 +1282,7 @@ async fn run_worker(
                 if let Err(error) = session.click(&run.settings).await {
                     fail_run(&mut machine, &emit);
                     active = None;
-                    (emit)(WorkerEvent::Error(error.to_string()));
+                    (emit)(WorkerEvent::Error(WorkerError::Click(error)));
                     // A revoked or failed session cannot safely be reused on retry.
                     if let Some(failed_session) = click_session.take() {
                         failed_session.close().await;
@@ -1312,7 +1372,7 @@ fn start_run(
         next_tick: Instant::now(),
     });
     (emit)(WorkerEvent::State(machine.state()));
-    (emit)(WorkerEvent::Status("Klicken aktiv".to_owned()));
+    (emit)(WorkerEvent::Status(WorkerStatus::Clicking));
 }
 
 /// Start clicking now, or first give the user a cancellable countdown.
@@ -1349,7 +1409,7 @@ fn stop_run(
     *active = None;
     *countdown = None;
     (emit)(WorkerEvent::State(machine.state()));
-    (emit)(WorkerEvent::Status("Gestoppt".to_owned()));
+    (emit)(WorkerEvent::Status(WorkerStatus::Stopped));
     true
 }
 
@@ -1457,7 +1517,7 @@ mod tests {
             Ok(())
         })
         .await;
-        assert_eq!(result, Err(HOTKEY_SESSION_CLOSED.to_owned()));
+        assert_eq!(result, Err(HotkeyError::SessionClosed));
     }
 
     #[test]
@@ -1622,10 +1682,8 @@ mod tests {
         (emit, rx)
     }
 
-    const START_FAILED: &str = "Die Klicksteuerung konnte nicht gestartet werden:";
-    const WORKER_GONE: Result<(), &str> =
-        Err("Die Klicksteuerung wurde beendet. Starte Klickmeister neu.");
-    const QUEUE_FULL: Result<(), &str> = Err("Klickmeister ist ausgelastet. Versuche es erneut.");
+    const WORKER_GONE: Result<(), SendError> = Err(SendError::Stopped);
+    const QUEUE_FULL: Result<(), SendError> = Err(SendError::Busy);
 
     #[test]
     fn failed_thread_start_is_reported_and_commands_name_stopped_worker() {
@@ -1637,7 +1695,7 @@ mod tests {
         let reported: Vec<_> = events.try_iter().collect();
         assert!(matches!(
             reported.as_slice(),
-            [WorkerEvent::Error(message)] if message.starts_with(START_FAILED)
+            [WorkerEvent::Error(WorkerError::WorkerStartFailed(_))]
         ));
         assert_eq!(worker.send(Command::Stop), WORKER_GONE);
         assert_eq!(worker.send(Command::Start(settings())), WORKER_GONE);
@@ -1659,7 +1717,7 @@ mod tests {
         let reported: Vec<_> = events.try_iter().collect();
         assert!(matches!(
             reported.as_slice(),
-            [(WorkerEvent::Error(message), true)] if *message == format!("{START_FAILED} Testfehler")
+            [(WorkerEvent::Error(WorkerError::WorkerStartFailed(details)), true)] if details == "Testfehler"
         ));
         assert_eq!(worker.send(Command::Stop), WORKER_GONE);
         assert_eq!(worker.send(Command::Start(settings())), WORKER_GONE);

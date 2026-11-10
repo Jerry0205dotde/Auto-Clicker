@@ -1,10 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
-use thiserror::Error;
 
 /// Highest rate of single clicks (press/release pairs), for every click type.
 pub const MAX_CLICKS_PER_SECOND: u64 = 500;
-const MAX_INTERVAL_HOURS: u64 = 24;
+pub(crate) const MAX_INTERVAL_HOURS: u64 = 24;
 pub const MAX_INTERVAL_MS: u64 = MAX_INTERVAL_HOURS * 60 * 60 * 1_000;
 pub const MAX_REPEAT_COUNT: u64 = 10_000_000;
 /// Largest fixed-position coordinate on either axis.
@@ -120,29 +119,19 @@ pub struct ClickSettings {
     pub monitor: Option<MonitorGeometry>,
 }
 
-#[derive(Debug, Error, Clone, PartialEq, Eq)]
+/// Why click settings are invalid. `messages` holds the shown texts.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ValidationError {
-    #[error(
-        "Wähle ein Klickintervall von mindestens {min_interval_ms} ms (höchstens {MAX_CLICKS_PER_SECOND} Klicks/s)."
-    )]
     IntervalTooShort { min_interval_ms: u64 },
-    #[error("Wähle ein Klickintervall von höchstens {MAX_INTERVAL_HOURS} Stunden.")]
     IntervalTooLong,
-    #[error("Wähle zwischen 1 und {MAX_REPEAT_COUNT} Klickzyklen.")]
     InvalidRepeat,
-    #[error(
-        "Die Koordinaten liegen außerhalb des unterstützten Bereichs. Wähle eine neue Position."
-    )]
     InvalidCoordinates,
-    #[error(
-        "Die feste Position liegt außerhalb des Bildschirms oder kein Bildschirm ist ausgewählt. Prüfe Bildschirm und Koordinaten."
-    )]
     InvalidMonitorPosition,
-    #[error("Wähle eine gültige Maustaste.")]
     InvalidMouseButton,
-    #[error("Wähle eine gültige Klickart.")]
     InvalidClickType,
 }
+
+impl std::error::Error for ValidationError {}
 
 impl ClickSettings {
     /// Validate timing, repeat limits and fixed coordinates against their monitor.
@@ -221,14 +210,6 @@ mod tests {
                 Err(ValidationError::IntervalTooLong)
             );
         }
-        assert_eq!(
-            ValidationError::IntervalTooShort { min_interval_ms: 4 }.to_string(),
-            "Wähle ein Klickintervall von mindestens 4 ms (höchstens 500 Klicks/s)."
-        );
-        assert_eq!(
-            ValidationError::IntervalTooLong.to_string(),
-            "Wähle ein Klickintervall von höchstens 24 Stunden."
-        );
     }
 
     #[test]
