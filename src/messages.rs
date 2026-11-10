@@ -159,6 +159,22 @@ pub fn window_unavailable() -> String {
     )
 }
 
+/// Reason a second start gives when the running instance does not answer.
+pub fn instance_not_answering() -> String {
+    translate("Klickmeister", "The running instance does not answer.")
+}
+
+/// Printed when closing the permissions outlasts the shutdown wait.
+pub fn slow_shutdown(seconds: u64) -> String {
+    fill(
+        &translate(
+            "Klickmeister",
+            "Clicking ended. Closing the permissions takes longer than %1 s and continues in the background.",
+        ),
+        &[&seconds],
+    )
+}
+
 pub fn instance_check_ended() -> String {
     translate("Klickmeister", "The check thread ended unexpectedly.")
 }

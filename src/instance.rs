@@ -210,7 +210,7 @@ async fn activate_running(
     match timeout(CALL_TIMEOUT, call).await {
         Ok(Ok(_)) => Ok(()),
         Ok(Err(error)) => Err(error.to_string()),
-        Err(_) => Err("Die laufende Instanz antwortet nicht.".to_owned()),
+        Err(_) => Err(messages::instance_not_answering()),
     }
 }
 

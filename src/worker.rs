@@ -333,11 +333,7 @@ impl WorkerHandle {
     /// End the worker and wait a bounded time for its portal cleanup.
     pub fn shutdown(self) {
         if !self.shutdown_within(SHUTDOWN_WAIT) {
-            eprintln!(
-                "Klicken beendet. Das Schließen der Freigaben dauert länger als {} s \
-                 und wird im Hintergrund fortgesetzt.",
-                SHUTDOWN_WAIT.as_secs()
-            );
+            eprintln!("{}", messages::slow_shutdown(SHUTDOWN_WAIT.as_secs()));
         }
     }
 

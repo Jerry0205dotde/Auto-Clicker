@@ -80,6 +80,14 @@ Klickmeister nutzt vorerst Standardwerte. Bevor geänderte Einstellungen gespeic
         <translation>Das Klickmeister-Fenster ist gerade nicht verfügbar.</translation>
     </message>
     <message>
+        <source>The running instance does not answer.</source>
+        <translation>Die laufende Instanz antwortet nicht.</translation>
+    </message>
+    <message>
+        <source>Clicking ended. Closing the permissions takes longer than %1 s and continues in the background.</source>
+        <translation>Klicken beendet. Das Schließen der Freigaben dauert länger als %1 s und wird im Hintergrund fortgesetzt.</translation>
+    </message>
+    <message>
         <source>The check thread ended unexpectedly.</source>
         <translation>Der Prüfthread wurde unerwartet beendet.</translation>
     </message>

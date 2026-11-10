@@ -305,6 +305,14 @@ fn german_translation_keeps_every_text() {
             "Das Klickmeister-Fenster ist gerade nicht verfügbar.",
         ),
         (
+            instance_not_answering(),
+            "Die laufende Instanz antwortet nicht.",
+        ),
+        (
+            slow_shutdown(5),
+            "Klicken beendet. Das Schließen der Freigaben dauert länger als 5 s und wird im Hintergrund fortgesetzt.",
+        ),
+        (
             instance_check_ended(),
             "Der Prüfthread wurde unerwartet beendet.",
         ),
