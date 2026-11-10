@@ -1032,6 +1032,53 @@ TestCase {
         compare(controller.configureCount, 1)
     }
 
+    // Issue #143: without a portal hotkey, a desktop shortcut for
+    // `klickmeister --toggle` unlocks Start once it has been checked.
+    function test_external_shortcut_check_unlocks_start() {
+        const message = findChild(main, "externalShortcutMessage")
+        const start = findChild(main, "startStopButton")
+        const status = findChild(main, "hotkeyStatusLabel")
+        const check = findChild(main, "externalShortcutButton")
+        verify(message !== null)
+        verify(start !== null)
+        verify(status !== null)
+        verify(check !== null)
+        compare(message.visible, false)
+        compare(check.visible, false)
+
+        controller.hotkey_ready = false
+        controller.hotkey_pending = false
+        tryCompare(message, "visible", true)
+        verify(message.text.indexOf("“klickmeister --toggle”") >= 0, message.text)
+        compare(start.enabled, false)
+        compare(check.visible, true)
+        compare(check.text, "Check shortcut")
+        mouseClick(check)
+        compare(controller.checkCount, 1)
+
+        // The worker waits for the shortcut; Start stays locked meanwhile.
+        controller.external_shortcut_checking = true
+        compare(check.text, "Cancel")
+        verify(message.text.indexOf("Press your shortcut") >= 0, message.text)
+        compare(start.enabled, false)
+        mouseClick(check)
+        compare(controller.cancelCheckCount, 1)
+
+        controller.external_shortcut_checking = false
+        controller.external_shortcut_confirmed = true
+        tryCompare(message, "visible", false)
+        compare(check.visible, false)
+        compare(start.enabled, true)
+        compare(status.text, "Own shortcut (klickmeister --toggle)")
+        mouseClick(start)
+        compare(controller.button_starts, 1)
+
+        // A portal dialog that is opening still blocks starts.
+        controller.hotkey_pending = true
+        controller.hotkey_configuring = true
+        compare(start.enabled, false)
+    }
+
     function test_run_control_stays_visible_at_minimum_size_data() {
         return [
             { tag: "cursor-ready", fixed: false, running: false, busy: false, ready: true, pending: false },
@@ -1078,6 +1125,13 @@ TestCase {
         }
         verify(button.visible && inWindow(button), "Run control must remain in the window")
         verify(status.visible && inWindow(status), "Run status must remain in the window")
+        // Issue #143: the check for an own shortcut stays reachable below long errors.
+        const check = findChild(main, "externalShortcutButton")
+        verify(check !== null)
+        compare(check.visible, !data.ready && !data.pending)
+        if (check.visible)
+            verify(inWindow(check) && check.width > 0,
+                   "The shortcut check must remain in the window")
         compare(button.enabled, data.running || data.busy || (data.ready && !data.pending))
         compare(button.text, data.running || data.busy ? "■  Stop" : "▶  Start")
         compare(button.Accessible.name, data.running || data.busy ? "Stop" : "Start")

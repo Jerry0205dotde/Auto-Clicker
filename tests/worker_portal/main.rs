@@ -14,3 +14,4 @@ mod permission;
 mod portal;
 mod restart;
 mod support;
+mod toggle;

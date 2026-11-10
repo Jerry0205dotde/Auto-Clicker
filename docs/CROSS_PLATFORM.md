@@ -45,9 +45,9 @@ Portal-spezifisch heißt nicht KDE-spezifisch. RemoteDesktop, ScreenCast, Global
 | Maustastencodes | `src/model.rs` (`MouseButton::evdev_code`) | Linux-evdev-Codes im sonst neutralen Modell |
 | Feste Position | `src/portal.rs` (`select_monitor_stream`) | ScreenCast-Streams mit Position und Größe; diese Metadaten sind laut Spezifikation optional |
 | Globales Kürzel | `src/worker.rs` (`setup_hotkey`, `HotkeyState`, `StartBarrier`) | GlobalShortcuts-Portal direkt im Worker, Schutz vor verspäteten Tastendrücken über die D-Bus-Nachrichtenreihenfolge |
-| Startsperre | `src/worker.rs`, `qml/Main.qml` | ohne registriertes Kürzel kein Start, auch wenn Klicks möglich wären |
+| Startsperre | `src/worker.rs`, `qml/Main.qml` | ohne Portal-Kürzel nur nach bestätigtem Kürzel für `klickmeister --toggle` |
 | Elternfenster | `src/parent_window.rs`, `src/qml_runtime.cpp` | `KWaylandExtras::exportToplevel` (ab KDE Frameworks 6.28) |
-| Einzelinstanz | `src/instance.rs`, `src/main.rs` | Session-D-Bus, `org.freedesktop.Application.Activate`, `XDG_ACTIVATION_TOKEN` |
+| Einzelinstanz | `src/instance.rs`, `src/main.rs` | Session-D-Bus, `org.freedesktop.Application.Activate` und `ActivateAction` (`--toggle`), `XDG_ACTIVATION_TOKEN` |
 | Einstellungen | `src/config.rs` | nur `XDG_CONFIG_HOME` bzw. `~/.config` |
 | Oberfläche | `src/main.rs`, `qml/*.qml` | fester Stil `org.kde.desktop`, Kirigami, Symbole aus dem Desktop-Thema |
 | Build und Pakete | `Cargo.toml`, `build.rs`, `PKGBUILD` | `ashpd` und `KF6WindowSystem` immer eingebunden, Paket verlangt `xdg-desktop-portal-kde` |
@@ -141,7 +141,7 @@ Jede Phase ist ein eigener PR oder eine kleine Reihe davon. Nach jeder Phase mus
 | --- | --- | ---: |
 | 1 | `InputBackend` einführen, Portal-Klicks dahinter, `evdev_code` ins Portal-Backend | 2–3 |
 | 2 | libei im Portal-Backend für mehr Geschwindigkeit unter Linux, `Notify*` als Rückfall | 4–7 |
-| 3 | `ShortcutBackend` einführen, Portal-Kürzel samt Startbarriere dahinter, Startsperre an Fähigkeiten, `--toggle` | 3–5 |
+| 3 | `ShortcutBackend` einführen, Portal-Kürzel samt Startbarriere dahinter, Startsperre an Fähigkeiten (`--toggle` mit bestätigtem externem Kürzel gibt es bereits) | 3–5 |
 | 4 | portabler Build: eigenes Theme-Singleton statt Kirigami, Stilwahl, Symbole, Pfade, `build.rs` nach Zielsystem, Einzelinstanz-Abstraktion | 5–8 |
 | 5 | GNOME prüfen und Texte von „KDE“ lösen, Flatpak | 4–6 |
 | 6 | X11-Backend | 3–5 |

@@ -57,6 +57,8 @@ Klickmeister läuft pro Sitzung nur einmal. Ein weiterer Start, etwa durch einen
 
 Als Tastenkürzel wird `Pause` vorgeschlagen. Das aktive Kürzel steht in der Fußleiste; mit **Ändern …** lässt es sich im KDE-Dialog anpassen. Ältere Portale ohne diesen Dialog (GlobalShortcuts Version 1) verweisen stattdessen auf die Systemeinstellungen unter „Kurzbefehle“. Klickmeister startet erst, wenn ein Tastenkürzel für Start und Stopp eingerichtet ist.
 
+Ohne Tastenkürzel vom Portal, etwa wenn das Portal fehlt oder die Freigabe abgelehnt wurde, lässt sich ein eigenes Kürzel verwenden. Lege dazu in den Systemeinstellungen unter „Kurzbefehle“ ein Kürzel an, das den Befehl `klickmeister --toggle` ausführt. Der Befehl startet oder stoppt das Klicken im bereits geöffneten Klickmeister; läuft keiner, beendet er sich mit einer Fehlermeldung. Wähle danach in Klickmeister **Kürzel prüfen** und drücke das Kürzel einmal. Dieser Druck klickt nicht, er bestätigt nur, dass das Kürzel ankommt. Erst danach lassen sich Läufe starten. Die Bestätigung gilt bis zum Schließen von Klickmeister.
+
 ### Start an der Mauszeigerposition
 
 Bei **Mauszeiger** folgt jeder Klick dem Mauszeiger. Beim Start über die Schaltfläche beginnt nach der Freigabe ein Countdown von drei Sekunden. Bewege den Mauszeiger in dieser Zeit zum Ziel. **Start abbrechen** oder das Tastenkürzel beendet den Countdown ohne Klick.
@@ -92,7 +94,9 @@ Mit dem Schließen des Fensters endet die Anwendung einschließlich ihrer Freiga
 
 ### Warum ist „Starten“ nicht verfügbar?
 
-Für jeden Lauf muss das Tastenkürzel für Start und Stopp eingerichtet sein. Falls die Freigabe abgelehnt, die Taste entfernt oder die Freigabe beendet wurde, wähle in der Fußleiste die Schaltfläche **Erneut versuchen**. Ein Neustart ist dafür nicht nötig.
+Für jeden Lauf muss ein Tastenkürzel für Start und Stopp eingerichtet sein, denn bei kurzen Intervallen und fester Position lässt sich **Stoppen** mit der Maus kaum erreichen. Falls die Freigabe abgelehnt, die Taste entfernt oder die Freigabe beendet wurde, wähle in der Fußleiste die Schaltfläche **Erneut versuchen**. Ein Neustart ist dafür nicht nötig.
+
+Klappt das nicht, richte ein eigenes Kürzel für `klickmeister --toggle` ein und wähle **Kürzel prüfen** (siehe [Erste Schritte](#erste-schritte)). Diese Prüfung ist nach jedem Start von Klickmeister erneut nötig.
 
 ### Warum wird eine feste Position nicht übernommen?
 

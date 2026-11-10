@@ -14,7 +14,7 @@ use crate::{
     config::ConfigError,
     eis::EisError,
     i18n::{fill, translate},
-    instance::InstanceError,
+    instance::{InstanceError, ToggleError},
     model::{MAX_CLICKS_PER_SECOND, MAX_INTERVAL_HOURS, MAX_REPEAT_COUNT, ValidationError},
     portal::PortalError,
     worker::{HotkeyError, SendError, WorkerError, WorkerStatus},
@@ -159,6 +159,16 @@ pub fn window_unavailable() -> String {
     )
 }
 
+/// Reply to `klickmeister --toggle` before the worker has started.
+pub fn toggle_not_ready() -> String {
+    translate("Klickmeister", "Klickmeister is not ready yet.")
+}
+
+/// Reply to an `ActivateAction` other than `toggle-clicking`.
+pub fn unknown_action(action: &str) -> String {
+    fill(&translate("Klickmeister", "Unknown action: %1"), &[&action])
+}
+
 /// Reason a second start gives when the running instance does not answer.
 pub fn instance_not_answering() -> String {
     translate("Klickmeister", "The running instance does not answer.")
@@ -209,6 +219,10 @@ impl fmt::Display for WorkerError {
             Self::HotkeyRequired => f.write_str(&translate(
                 "Klickmeister",
                 "Set up a start and stop shortcut before starting.",
+            )),
+            Self::ExternalShortcutUnconfirmed => f.write_str(&translate(
+                "Klickmeister",
+                "Your shortcut for “klickmeister --toggle” is not confirmed yet. Choose “Check shortcut” and press it once.",
             )),
             Self::InvalidSettings(error) => error.fmt(f),
             Self::Click(error) => error.fmt(f),
@@ -480,6 +494,39 @@ impl fmt::Display for ConfigError {
             Self::Serialize(details) => write(
                 f,
                 translate("Klickmeister", "Settings could not be prepared for saving: %1"),
+                &[details],
+            ),
+        }
+    }
+}
+
+impl fmt::Display for ToggleError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::NoSessionBus(details) => write(
+                f,
+                translate("Klickmeister", "The D-Bus session is not reachable: %1"),
+                &[details],
+            ),
+            Self::NotRunning => f.write_str(&translate(
+                "Klickmeister",
+                "Klickmeister is not running. Open Klickmeister first.",
+            )),
+            Self::Refused(details) => write(
+                f,
+                translate(
+                    "Klickmeister",
+                    "Klickmeister did not accept the command: %1",
+                ),
+                &[details],
+            ),
+            Self::Timeout => f.write_str(&translate(
+                "Klickmeister",
+                "Klickmeister does not answer. The command may not have been carried out.",
+            )),
+            Self::Thread(details) => write(
+                f,
+                translate("Klickmeister", "Klickmeister could not be reached: %1"),
                 &[details],
             ),
         }

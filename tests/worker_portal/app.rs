@@ -13,7 +13,7 @@ use tokio::{
 };
 
 use super::portal::{Shared, fake_portal};
-use super::support::{BUS_TEST_LOCK, TestResult, continuous, ensure, event};
+use super::support::{BUS_TEST_LOCK, TestResult, continuous, ensure, event, presses};
 
 /// The real application, without a display and with its own settings. It is
 /// killed on drop: after the fake portal ends, the private bus would start the
@@ -148,6 +148,108 @@ async fn a_second_launch_shows_the_first_without_a_second_hotkey_session() -> Te
         let mut third = App::launch(&config, "third", None)?;
         hotkey_sessions_reach(&observed, 2, &mut third).await?;
         third.kill()?;
+        Ok(())
+    }
+    .await;
+    let _ = std::fs::remove_dir_all(&config);
+    service.close().await?;
+    result
+}
+
+/// Run `klickmeister --toggle` and return whether it succeeded and its stderr.
+async fn run_toggle(
+    config: &std::path::Path,
+) -> Result<(bool, String), Box<dyn std::error::Error>> {
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_klickmeister"));
+    command
+        .arg("--toggle")
+        .env("QT_QPA_PLATFORM", "offscreen")
+        // English texts, whatever the developer's language.
+        .env("LC_ALL", "C")
+        .env_remove("LANGUAGE")
+        .env("XDG_CONFIG_HOME", config)
+        .stdin(std::process::Stdio::null());
+    // The call itself gives up after a few seconds.
+    let output = tokio::task::spawn_blocking(move || command.output()).await??;
+    Ok((
+        output.status.success(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    ))
+}
+
+async fn presses_reach(observed: &Shared, count: usize) -> TestResult {
+    timeout(Duration::from_secs(5), async {
+        while presses(observed) < count {
+            sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .map_err(|_| format!("expected {count} clicks, saw {}", presses(observed)).into())
+}
+
+/// Issue #143: `klickmeister --toggle` starts and stops clicking in the
+/// running application through the same path as the hotkey, and without a
+/// running instance it fails instead of opening one.
+#[tokio::test]
+#[ignore = "requires a private D-Bus session via dbus-run-session"]
+async fn toggle_command_starts_and_stops_the_running_application() -> TestResult {
+    let _serial = BUS_TEST_LOCK.lock().await;
+    let observed = Shared::default();
+    let service = fake_portal(&observed).await?;
+    let config = std::env::temp_dir().join(format!("klickmeister-toggle-{}", std::process::id()));
+    std::fs::create_dir_all(&config)?;
+    let result: TestResult = async {
+        let (ok, stderr) = run_toggle(&config).await?;
+        ensure(
+            !ok && stderr.contains("not running"),
+            &format!("a toggle without an instance must fail: {stderr}"),
+        )?;
+        ensure(
+            observed
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .hotkey_created
+                == 0,
+            "a toggle must not start Klickmeister",
+        )?;
+
+        let mut app = App::launch(&config, "toggled", None)?;
+        hotkey_sessions_reach(&observed, 1, &mut app).await?;
+        // The hotkey binding completes shortly after its session; until then
+        // the worker drops a toggle. Count only a toggle that led to clicks.
+        let mut started = false;
+        for _ in 0..20 {
+            let (ok, _) = run_toggle(&config).await?;
+            if ok && presses_reach(&observed, 2).await.is_ok() {
+                started = true;
+                break;
+            }
+            sleep(Duration::from_millis(100)).await;
+        }
+        ensure(
+            started,
+            &format!("a toggle must start clicking: {}", app.stderr()),
+        )?;
+
+        let (ok, stderr) = run_toggle(&config).await?;
+        ensure(ok, &format!("the second toggle must be accepted: {stderr}"))?;
+        sleep(Duration::from_millis(500)).await;
+        let stopped_at = presses(&observed);
+        sleep(Duration::from_millis(500)).await;
+        ensure(
+            presses(&observed) == stopped_at,
+            "the second toggle must stop clicking",
+        )?;
+        ensure(
+            app.0.try_wait()?.is_none(),
+            "the application must keep running",
+        )?;
+
+        // A new toggle after the stop starts again.
+        let (ok, stderr) = run_toggle(&config).await?;
+        ensure(ok, &format!("the third toggle must be accepted: {stderr}"))?;
+        presses_reach(&observed, stopped_at + 2).await?;
+        app.kill()?;
         Ok(())
     }
     .await;

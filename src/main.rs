@@ -1,15 +1,29 @@
 use cxx_qt_lib::{
-    QGuiApplication, QMap, QMapPair_QString_QVariant, QQmlApplicationEngine, QQuickStyle, QString,
-    QUrl, QVariant,
+    QCoreApplication, QGuiApplication, QMap, QMapPair_QString_QVariant, QQmlApplicationEngine,
+    QQuickStyle, QString, QUrl, QVariant,
 };
 use klickmeister::{
-    APP_ID, i18n,
+    APP_ID, controller, i18n,
     instance::{self, Claim, InstanceError},
     messages, parent_window, qml_runtime,
 };
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
+    // A shortcut in the desktop's settings runs this to start or stop clicking
+    // in the running instance. It never opens a window or starts Klickmeister.
+    if std::env::args_os().any(|argument| argument == "--toggle") {
+        // Only for the translated error text; this connects to no display.
+        let _app = QCoreApplication::new();
+        i18n::install_translator();
+        return match instance::toggle_running() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("{error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     let smoke_test = std::env::args_os().any(|argument| argument == "--smoke-test");
     // Read before Qt starts: Qt Wayland consumes the launcher's token.
     let activation_token = std::env::var("XDG_ACTIVATION_TOKEN")
@@ -39,7 +53,11 @@ fn main() -> ExitCode {
     let _instance = if smoke_test {
         None
     } else {
-        match instance::claim(activation_token, qml_runtime::queue_activation) {
+        match instance::claim(
+            activation_token,
+            qml_runtime::queue_activation,
+            controller::deliver_toggle,
+        ) {
             Ok(Claim::Primary(guard)) => Some(guard),
             Ok(Claim::Secondary) => {
                 println!("{}", messages::already_running());

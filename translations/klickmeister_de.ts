@@ -80,6 +80,14 @@ Klickmeister nutzt vorerst Standardwerte. Bevor geänderte Einstellungen gespeic
         <translation>Das Klickmeister-Fenster ist gerade nicht verfügbar.</translation>
     </message>
     <message>
+        <source>Klickmeister is not ready yet.</source>
+        <translation>Klickmeister ist noch nicht bereit.</translation>
+    </message>
+    <message>
+        <source>Unknown action: %1</source>
+        <translation>Unbekannte Aktion: %1</translation>
+    </message>
+    <message>
         <source>The running instance does not answer.</source>
         <translation>Die laufende Instanz antwortet nicht.</translation>
     </message>
@@ -126,6 +134,10 @@ Klickmeister nutzt vorerst Standardwerte. Bevor geänderte Einstellungen gespeic
     <message>
         <source>Set up a start and stop shortcut before starting.</source>
         <translation>Richte vor dem Start ein Tastenkürzel für Start und Stopp ein.</translation>
+    </message>
+    <message>
+        <source>Your shortcut for “klickmeister --toggle” is not confirmed yet. Choose “Check shortcut” and press it once.</source>
+        <translation>Dein Kürzel für „klickmeister --toggle“ ist noch nicht bestätigt. Wähle „Kürzel prüfen“ und drücke es einmal.</translation>
     </message>
     <message>
         <source>Mouse control could not be started: %1</source>
@@ -320,6 +332,22 @@ Klickmeister nutzt vorerst Standardwerte. Bevor geänderte Einstellungen gespeic
         <translation>Einstellungen konnten nicht für das Speichern vorbereitet werden: %1</translation>
     </message>
     <message>
+        <source>Klickmeister is not running. Open Klickmeister first.</source>
+        <translation>Klickmeister läuft nicht. Öffne zuerst Klickmeister.</translation>
+    </message>
+    <message>
+        <source>Klickmeister did not accept the command: %1</source>
+        <translation>Klickmeister hat den Befehl nicht angenommen: %1</translation>
+    </message>
+    <message>
+        <source>Klickmeister does not answer. The command may not have been carried out.</source>
+        <translation>Klickmeister antwortet nicht. Der Befehl wurde eventuell nicht ausgeführt.</translation>
+    </message>
+    <message>
+        <source>Klickmeister could not be reached: %1</source>
+        <translation>Klickmeister ließ sich nicht erreichen: %1</translation>
+    </message>
+    <message>
         <source>Cannot check whether Klickmeister is already running: %1</source>
         <translation>Es lässt sich nicht prüfen, ob Klickmeister bereits läuft: %1</translation>
     </message>
@@ -395,6 +423,10 @@ Klickmeister nutzt vorerst Standardwerte. Bevor geänderte Einstellungen gespeic
         <translation>Wird eingerichtet …</translation>
     </message>
     <message>
+        <source>Own shortcut (klickmeister --toggle)</source>
+        <translation>Eigenes Kürzel (klickmeister --toggle)</translation>
+    </message>
+    <message>
         <source>Not available</source>
         <translation>Nicht verfügbar</translation>
     </message>
@@ -413,6 +445,18 @@ Klickmeister nutzt vorerst Standardwerte. Bevor geänderte Einstellungen gespeic
     <message>
         <source>Change the start and stop shortcut</source>
         <translation>Tastenkürzel für Start und Stopp ändern</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>Abbrechen</translation>
+    </message>
+    <message>
+        <source>Check shortcut</source>
+        <translation>Kürzel prüfen</translation>
+    </message>
+    <message>
+        <source>Check whether your shortcut for “klickmeister --toggle” arrives</source>
+        <translation>Prüfen, ob dein Kürzel für „klickmeister --toggle“ ankommt</translation>
     </message>
     <message>
         <source>■  Cancel start (%1)</source>
@@ -457,6 +501,14 @@ Klickmeister nutzt vorerst Standardwerte. Bevor geänderte Einstellungen gespeic
     <message>
         <source>This desktop portal cannot change the shortcut from within Klickmeister. Change it in System Settings under “Shortcuts”.</source>
         <translation>Dieses Desktop-Portal kann das Tastenkürzel nicht aus Klickmeister heraus ändern. Ändere es in den Systemeinstellungen unter „Kurzbefehle“.</translation>
+    </message>
+    <message>
+        <source>Press your shortcut for “klickmeister --toggle” now. This only checks that it arrives; nothing is clicked.</source>
+        <translation>Drücke jetzt dein Tastenkürzel für „klickmeister --toggle“. Dabei wird nur geprüft, ob es ankommt; es wird nicht geklickt.</translation>
+    </message>
+    <message>
+        <source>Without a shortcut from the desktop portal, you can set up your own: in System Settings under “Shortcuts”, add a shortcut for the command “klickmeister --toggle”, then choose “Check shortcut” below. Only then can a run start, because the shortcut also stops it.</source>
+        <translation>Ohne Tastenkürzel vom Desktop-Portal kannst du ein eigenes einrichten: Lege in den Systemeinstellungen unter „Kurzbefehle“ ein Kürzel für den Befehl „klickmeister --toggle“ an und wähle dann unten „Kürzel prüfen“. Erst danach lässt sich ein Lauf starten, denn mit dem Kürzel stoppst du ihn auch.</translation>
     </message>
     <message>
         <source>Mouse button:</source>

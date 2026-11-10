@@ -31,7 +31,7 @@ KLICKMEISTER_TEST_SCALE=1.5 bash tests/qml-wayland.sh
 
 Die QML-Tests verwenden den KDE-Control-Stil und einen Controller-Testersatz. Die AT-SPI-Prüfung startet das Hauptfenster ohne Worker und prüft die zugänglichen Namen der Koordinatenfelder und ihrer Texteingaben. Die D-Bus-Tests prüfen den Rust-Worker gegen simulierte Portale. Dazu gehören Klickfolgen, Stopps, verzögerte Tastenkürzel-Signale, Sitzungsende und Fehler beim Loslassen einer Maustaste. Ein weiterer D-Bus-Test startet das gebaute Programm ohne Bildschirm zweimal. Der zweite Start muss das erste Fenster anzeigen und sich beenden, ohne eine weitere Tastenkürzel-Sitzung anzulegen; nach einem Absturz der ersten Instanz muss ein neuer Start wieder möglich sein. Diese Tests erzeugen keine Mausklicks auf dem Desktop.
 
-Tastenkürzel-Signale, die sich während eines Laufs angestaut haben, dürfen diesen noch stoppen, danach aber keinen neuen Lauf starten. Eine neue Betätigung nach dem Stopp startet wie gewohnt.
+Tastenkürzel-Signale, die sich während eines Laufs angestaut haben, dürfen diesen noch stoppen, danach aber keinen neuen Lauf starten. Eine neue Betätigung nach dem Stopp startet wie gewohnt. Dasselbe gilt für angestaute Aufrufe von `klickmeister --toggle`; ohne Portal-Kürzel startet ein Toggle erst nach der Kürzelprüfung, und der prüfende Toggle klickt nicht.
 
 Echte KDE-Dialoge und die Zeigersteuerung auf physischen Bildschirmen werden zusätzlich in einer nativen Plasma-Wayland-Sitzung geprüft. Die Werkzeuge und Voraussetzungen dafür sind unter [tests/native](tests/native/README.md) dokumentiert; das gebaute Programm braucht dafür die [Desktop-Integration](#desktop-integration).
 
