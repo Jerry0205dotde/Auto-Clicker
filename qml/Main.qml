@@ -375,8 +375,12 @@ Kirigami.ApplicationWindow {
                     elide: Text.ElideRight
                     Accessible.name: qsTr("Shortcut: %1").arg(text)
                 }
+                // Both buttons shrink rather than widen the footer past the
+                // window, e.g. with wide fallback fonts.
                 Controls.ToolButton {
                     objectName: "hotkeyConfigureButton"
+                    Layout.fillWidth: true
+                    Layout.maximumWidth: implicitWidth
                     icon.name: "input-keyboard"
                     text: controller.hotkey_ready ? qsTr("Change…") : qsTr("Try again")
                     enabled: root.controlsEnabled && !controller.hotkey_pending
@@ -394,6 +398,8 @@ Kirigami.ApplicationWindow {
                 // In the footer, so a long error above cannot scroll it away.
                 Controls.ToolButton {
                     objectName: "externalShortcutButton"
+                    Layout.fillWidth: true
+                    Layout.maximumWidth: implicitWidth
                     visible: externalShortcutMessage.visible
                     icon.name: controller.external_shortcut_checking ? "dialog-cancel" : "dialog-ok"
                     text: controller.external_shortcut_checking ? qsTr("Cancel") : qsTr("Check shortcut")

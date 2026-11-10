@@ -1130,7 +1130,7 @@ TestCase {
         verify(check !== null)
         compare(check.visible, !data.ready && !data.pending)
         if (check.visible)
-            verify(inWindow(check) && check.width >= check.implicitWidth - 1,
+            verify(inWindow(check) && check.width > 0,
                    "The shortcut check must remain in the window")
         compare(button.enabled, data.running || data.busy || (data.ready && !data.pending))
         compare(button.text, data.running || data.busy ? "■  Stop" : "▶  Start")
