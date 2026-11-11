@@ -15,7 +15,7 @@ concurrency:
 jobs:
   build:
     name: Build and verify Arch and AUR packages
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 45
     container: archlinux:base-devel
     steps:
@@ -57,7 +57,7 @@ jobs:
     name: Publish downloads
     if: github.event_name == 'push' && github.ref_type == 'tag'
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     permissions:
       contents: write
     steps:

@@ -15,7 +15,7 @@ concurrency:
 jobs:
   checks:
     name: Rust, portal, QML and package checks
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 45
     container: archlinux:base-devel
     steps:
@@ -94,7 +94,8 @@ jobs:
 
   virtual-wayland:
     name: QML on virtual KWin
-    runs-on: ubuntu-latest
+    # Blacksmith has no /dev/udmabuf; keep this device-dependent test on GitHub.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     # KWin 6.8 composites only with OpenGL and needs a render device. The
     # runner's udmabuf device provides one; see tests/virtual-wayland.md.
