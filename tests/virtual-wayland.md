@@ -9,6 +9,8 @@ Python 3 is required to verify the effective output configuration before QML run
 The `virtual-wayland` CI job installs rolling Arch Linux packages, like the
 other jobs, and prints the installed KWin, Qt, libkscreen, and Mesa versions.
 The container receives the runner's `/dev/udmabuf` and nothing else from the host.
+This job stays on GitHub's Ubuntu 24.04 runner because Blacksmith's runner does
+not provide `/dev/udmabuf`; the other jobs use Blacksmith.
 
 ## Why the render device is required
 

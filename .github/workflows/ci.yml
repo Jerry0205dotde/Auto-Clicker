@@ -94,7 +94,8 @@ jobs:
 
   virtual-wayland:
     name: QML on virtual KWin
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    # Blacksmith has no /dev/udmabuf; keep this device-dependent test on GitHub.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     # KWin 6.8 composites only with OpenGL and needs a render device. The
     # runner's udmabuf device provides one; see tests/virtual-wayland.md.
